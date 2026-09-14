@@ -37,6 +37,43 @@
     return Math.min(30, Math.max(0, n));
   }
 
+  // Deduplication tracker: guarantees strictly 1 comment per post
+  const commentedPostIds = new Set();
+
+  try {
+    chrome.storage.local.get({ ial_commented_posts: [] }, (res) => {
+      if (res && Array.isArray(res.ial_commented_posts)) {
+        res.ial_commented_posts.forEach(id => commentedPostIds.add(id));
+      }
+    });
+  } catch (e) {}
+
+  function saveCommentedPostId(id) {
+    if (!id) return;
+    commentedPostIds.add(id);
+    try {
+      chrome.storage.local.get({ ial_commented_posts: [] }, (res) => {
+        const list = res.ial_commented_posts || [];
+        if (!list.includes(id)) {
+          list.push(id);
+          if (list.length > 2000) list.shift();
+          chrome.storage.local.set({ ial_commented_posts: list });
+        }
+      });
+    } catch (e) {}
+  }
+
+  function getPostShortcode() {
+    const match = window.location.pathname.match(/\/(p|reel)\/([a-zA-Z0-9_-]+)/);
+    if (match) return match[2];
+    const link = document.querySelector('div[role="dialog"] a[href*="/p/"], div[role="dialog"] a[href*="/reel/"]');
+    if (link) {
+      const m = (link.getAttribute('href') || '').match(/\/(p|reel)\/([a-zA-Z0-9_-]+)/);
+      if (m) return m[2];
+    }
+    return window.location.pathname;
+  }
+
   // Load saved settings
   chrome.storage.sync.get(STATE.settings, (stored) => {
     if (stored) {
@@ -65,7 +102,7 @@
             <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
           </svg>
           <span class="ial-brand-gradient">Auto Bot</span>
-          <span style="font-size: 10px; color: #888;">v1.1.1</span>
+          <span style="font-size: 10px; color: #888;">v1.1.2</span>
         </div>
         <div class="ial-header-actions">
           <button class="ial-btn-icon" id="ial-btn-toggle" title="Minimize / Expand">_</button>
@@ -939,16 +976,24 @@ Write the authentic comment:`;
 
       // 2. COMMENT ACTION (if mode is 'comment' or 'both')
       if ((mode === 'comment' || mode === 'both') && !isStopRequested && !isPauseRequested) {
-        const postCtx = getPostContext(modal);
-        notifyStatus('Generating authentic AI comment...');
-        const comment = await generateAuthenticComment(postCtx);
+        const currentPostId = getPostShortcode();
 
-        if (comment) {
-          notifyStatus(`Posting: "${comment.substring(0, 25)}..."`);
-          const posted = await postCommentOnModal(modal, comment);
-          if (posted) {
-            STATE.commentedCount++;
-            notifyStatus(`Commented! (${STATE.commentedCount})`);
+        if (commentedPostIds.has(currentPostId)) {
+          notifyStatus('1-comment limit: already commented. Skipping...');
+        } else {
+          const postCtx = getPostContext(modal);
+          notifyStatus('Generating authentic AI comment...');
+          const comment = await generateAuthenticComment(postCtx);
+
+          if (comment) {
+            notifyStatus(`Posting: "${comment.substring(0, 25)}..."`);
+            const posted = await postCommentOnModal(modal, comment);
+            if (posted) {
+              commentedPostIds.add(currentPostId);
+              saveCommentedPostId(currentPostId);
+              STATE.commentedCount++;
+              notifyStatus(`Commented! (${STATE.commentedCount})`);
+            }
           }
         }
       }
