@@ -1,61 +1,67 @@
-# Instagram Profile Auto-Liker Chrome Extension
+# Instagram Auto Liker & AI Commenter (v1.1.0)
 
-A lightweight, automated Chrome Extension (Manifest V3) to like all posts (photos, reels, videos) on any target Instagram profile.
+A powerful Chrome Extension (Manifest V3) to automatically like posts and generate **authentic, human-sounding AI comments** on any target Instagram profile.
 
-Includes **built-in safety algorithms**, **humanized random delays**, **maximum post limits**, and a **floating on-screen HUD** so you don't lose controls when navigating.
+Powered by **Google Gemini**, **OpenAI ChatGPT**, and **Open-Source Vision Models (Llama 3.2 Vision via OpenRouter)**, with a **smart offline fallback** that works without any API keys.
 
 ---
 
-## Features
+## What's New in v1.1.0
 
-- **Profile Batch Liker:** Automatically opens the first post on a profile and iterates through every photo and reel via lightbox navigation.
-- **Floating On-Screen HUD:** A floating control bar directly on the Instagram page with live stats (Liked, Skipped, Limit), Start/Pause/Stop buttons, and status messages.
-- **Dual Controls:** Use either the Chrome Extension Popup icon or the on-screen Floating Widget.
-- **Smart Skip:** Detects if a post is already liked (red heart) and skips it to save time and actions.
-- **Anti-Ban Safety Delays:** Configurable random jitter (e.g. 3 to 6 seconds between likes) to mimic human browsing and protect your account from Instagram action blocks.
-- **Action Block Detection:** Automatically detects Instagram "Try Again Later" warnings and pauses execution immediately to protect your account.
-- **Draggable & Minimizable:** Move the floating widget anywhere on your screen or collapse it into a minimal pill.
+- 🤖 **AI-Powered Photo Commenting:** Analyzes the image and post caption using multimodal vision AI and writes genuine, 1-line human comments.
+- 🎯 **3 Action Modes:**
+  - `❤️ Like Only`: Pure auto-liking.
+  - `💬 Comment Only`: Auto-analyzes each photo and posts authentic comments.
+  - `❤️+💬 Like & Comment`: Likes and leaves an authentic comment on each post.
+- 🧠 **Multiple AI Providers:**
+  - **Google Gemini (Recommended):** Generous free tier via `gemini-1.5-flash`.
+  - **OpenAI (ChatGPT):** `gpt-4o-mini` / `gpt-4o`.
+  - **Open-Source / OpenRouter:** Llama 3.2 Vision and any OpenAI-compatible endpoint.
+  - **Smart Offline Engine:** Generates natural context-aware comments without any API key.
+- 🗣️ **Human Authenticity Prompting:** Strict anti-bot prompts prevent robotic clichés (e.g. *"What a splendid photograph"*) and outputs natural follower comments (e.g. *"the lighting here is so good 🔥"*, *"the fit goes hard 🙌"*, *"views are insane"*).
+- 🎨 **Comment Tones:** Choose between *Casual & Authentic*, *Hype & High Energy*, *Aesthetic & Artistic*, or *Short & Sweet (1-3 words)*.
+- ⚡ **0s Instant Speed & Dual Controls:** Floating draggable HUD on Instagram + Toolbar Popup.
 
 ---
 
 ## Installation Guide (Chrome / Edge / Brave)
 
-1. Open your browser and go to the Extensions manager:
-   - **Chrome:** `chrome://extensions`
-   - **Edge:** `edge://extensions`
-   - **Brave:** `brave://extensions`
-2. Turn on **Developer mode** (toggle switch in the top-right corner).
-3. Click the **Load unpacked** button in the top-left corner.
-4. Select the extension directory:
+1. Go to `chrome://extensions` in your browser.
+2. Turn on **Developer mode** (toggle in top-right corner).
+3. Click **Load unpacked** (top-left).
+4. Select the directory on your Desktop:
    ```
-   C:\Users\xxxx\xxxx\
+   C:\Users\<YourUsername>\Desktop\insta-auto-liker-extension
    ```
-5. The extension **"Instagram Auto Liker - Profile Batch Liker"** is now installed! Pin it to your Chrome toolbar for quick access.
+5. Pin **"Instagram Auto Liker & AI Commenter"** to your Chrome toolbar.
+
+---
+
+## How to Set Up AI Commenting
+
+### Option A: Google Gemini (Free Tier - Recommended)
+1. Get a free API key at [Google AI Studio](https://aistudio.google.com).
+2. Click the extension icon in Chrome.
+3. Under **AI Comment Engine**, select **Google Gemini**.
+4. Paste your API key.
+
+### Option B: OpenAI ChatGPT
+1. Get an API key from [OpenAI Platform](https://platform.openai.com).
+2. Select **OpenAI (ChatGPT / GPT-4o)** in the extension popup and paste your key.
+
+### Option C: Smart Offline Fallback (Zero Setup)
+1. Select **Smart Offline Fallback**.
+2. No API key needed! The extension uses built-in context-aware comment libraries matching the post caption and image tags.
 
 ---
 
 ## How to Use
 
-1. **Log in to Instagram:**
-   Go to [https://www.instagram.com](https://www.instagram.com) and log in to your account.
-2. **Navigate to the Target Profile:**
-   Open the profile page of the person whose posts you want to like (e.g., `https://www.instagram.com/username/`).
-3. **Configure & Start:**
-   - Look at the bottom-right corner of the page: you will see the **Auto Liker Floating Widget**.
-   - (Optional) Click the extension icon in your Chrome toolbar to customize delay (default 3–6s) or set a maximum post limit (default 30).
-   - Click **▶ Start Auto-Liking** (on either the floating widget or popup).
-4. **Sit back & watch:**
-   - The extension opens the first post.
-   - It checks if the post is already liked. If not, it likes it.
-   - It waits a randomized delay (showing a live countdown).
-   - It advances to the next post automatically.
-   - You can click **⏸ Pause** or **⏹ Stop** at any time.
-
----
-
-## Recommended Account Safety Guidelines
-
-Instagram actively monitors rapid automated interactions. To keep your account safe:
-- **Keep delays at 3–6 seconds or higher.** Avoid setting delays below 2 seconds.
-- **Limit batch runs:** Keep batches to **30–50 posts per session**.
-- If Instagram ever shows a "Try Again Later" action block, wait 12–24 hours before liking posts again.
+1. Log in to [instagram.com](https://www.instagram.com).
+2. Go to any user profile page (`https://www.instagram.com/<username>/`).
+3. On the floating on-screen HUD (or extension popup):
+   - Choose your mode: **❤️+💬 Both**, **❤️ Like**, or **💬 Comment**.
+   - Choose your speed: **⚡ 0s**, **1s**, or **3s**.
+   - Set your limit (e.g. 20, 50 posts).
+4. Click **▶ Start**.
+5. The extension will open posts, like and/or analyze photos, post authentic comments, and advance automatically!

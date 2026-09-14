@@ -5,14 +5,14 @@
   right: 24px;
   z-index: 2147483647;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background: rgba(18, 18, 18, 0.94);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(18, 18, 18, 0.95);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.65);
   border-radius: 14px;
-  width: 300px;
+  width: 320px;
   overflow: hidden;
   transition: transform 0.25s ease, opacity 0.25s ease, height 0.25s ease;
   user-select: none;
@@ -103,25 +103,57 @@
   gap: 10px;
 }
 
+/* Mode Switcher on HUD */
+.ial-mode-row {
+  display: flex;
+  gap: 5px;
+}
+
+.ial-mode-btn {
+  flex: 1;
+  background: #252525;
+  color: #b0b0b0;
+  border: 1px solid #3d3d3d;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s ease;
+}
+
+.ial-mode-btn:hover {
+  background: #333;
+  color: #fff;
+}
+
+.ial-mode-btn.active {
+  background: linear-gradient(45deg, #e1306c, #fd1d1d);
+  color: #fff;
+  border-color: transparent;
+}
+
+/* Stats */
 .ial-stats {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 6px;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 4px;
   background: rgba(0, 0, 0, 0.35);
-  padding: 8px;
+  padding: 8px 6px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.05);
   text-align: center;
 }
 
 .ial-stat-number {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   color: #fff;
 }
 
 .ial-stat-title {
-  font-size: 10px;
+  font-size: 9px;
   color: #8e8e8e;
   text-transform: uppercase;
 }
