@@ -28,7 +28,7 @@ Includes **built-in safety algorithms**, **humanized random delays**, **maximum 
 3. Click the **Load unpacked** button in the top-left corner.
 4. Select the extension directory:
    ```
-   C:\Users\NaveenKumarAvula\.gemini\antigravity\scratch\insta-auto-liker-extension
+   C:\Users\xxxx\xxxx\
    ```
 5. The extension **"Instagram Auto Liker - Profile Batch Liker"** is now installed! Pin it to your Chrome toolbar for quick access.
 
