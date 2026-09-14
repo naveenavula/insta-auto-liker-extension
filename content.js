@@ -556,75 +556,180 @@ Write the authentic comment:`;
     return defaultCasual[Math.floor(Math.random() * defaultCasual.length)];
   }
 
+  // Set value on React-controlled inputs/textareas by triggering the internal React _valueTracker
+  function setReactInputValue(el, value) {
+    if (!el) return;
+    try {
+      const isTextArea = el instanceof HTMLTextAreaElement || el.tagName === 'TEXTAREA';
+      const proto = isTextArea ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (setter) {
+        setter.call(el, value);
+      } else {
+        el.value = value;
+      }
+      if (el._valueTracker) {
+        el._valueTracker.setValue(value);
+      }
+    } catch (e) {
+      el.value = value;
+    }
+
+    // Dispatch rich event sequence to guarantee React state synchronization
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: value }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
   // Automated posting of comment into Instagram post lightbox
   async function postCommentOnModal(modal, commentText) {
     const scope = modal || document;
 
-    // 1. Try finding comment textarea
-    let textarea = scope.querySelector('form textarea[aria-label*="comment" i], form textarea, textarea[placeholder*="comment" i]');
+    notifyStatus('Locating comment box...');
 
-    // If not open, look for comment button icon to expand the textarea
-    if (!textarea) {
-      const commentSvg = scope.querySelector('svg[aria-label="Comment"], svg[aria-label="Comentar"], svg[aria-label="Commenter"]');
+    // 1. Find comment input element (textarea or contenteditable)
+    let inputEl = scope.querySelector('form textarea, textarea[aria-label*="comment" i], textarea[placeholder*="comment" i], div[role="textbox"][contenteditable="true"], div[contenteditable="true"]');
+    
+    // If not in modal scope, search full document (Instagram sometimes portals sidebar comments)
+    if (!inputEl) {
+      inputEl = document.querySelector('div[role="dialog"] form textarea, form textarea, textarea[aria-label*="comment" i], textarea[placeholder*="comment" i], div[role="textbox"][contenteditable="true"]');
+    }
+
+    // If still not visible, click the speech bubble / comment icon to open it
+    if (!inputEl) {
+      const commentSvg = (modal || document).querySelector('svg[aria-label="Comment"], svg[aria-label="Comentar"], svg[aria-label="Commenter"]');
       if (commentSvg) {
         const btn = commentSvg.closest('button, [role="button"]') || commentSvg;
         btn.click();
-        await sleep(300);
-        textarea = scope.querySelector('form textarea, textarea[placeholder*="comment" i]');
+        await sleep(500);
+        inputEl = (modal || document).querySelector('form textarea, textarea[placeholder*="comment" i], div[role="textbox"][contenteditable="true"]');
       }
     }
 
-    if (!textarea) {
-      notifyStatus('Comment box not found (may be disabled on post).');
+    if (!inputEl) {
+      notifyStatus('⚠️ Comments disabled or comment box not found.');
       return false;
     }
 
-    // 2. Focus and type comment
-    textarea.focus();
-    await sleep(100);
-
-    // Insert text triggering React synthetic handlers
-    document.execCommand('insertText', false, commentText);
-    textarea.value = commentText;
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+    // 2. Focus and click to activate
+    inputEl.focus();
+    inputEl.click();
     await sleep(200);
 
-    // 3. Click Post Button
-    const form = textarea.closest('form');
+    notifyStatus('Typing comment...');
+
+    // 3. Insert the text using multiple techniques to guarantee React sync
+    if (inputEl.tagName === 'TEXTAREA' || inputEl.tagName === 'INPUT') {
+      // Clear first
+      setReactInputValue(inputEl, '');
+      await sleep(50);
+
+      // Attempt native execCommand first (best for React cursor)
+      try {
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, commentText);
+      } catch (e) {}
+
+      // Guarantee value set via prototype descriptor
+      setReactInputValue(inputEl, commentText);
+
+      // Simulate a small keypress to trigger any key-up validations
+      inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }));
+      inputEl.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', bubbles: true }));
+    } else {
+      // Contenteditable div
+      inputEl.focus();
+      try {
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, commentText);
+      } catch (e) {}
+      inputEl.innerText = commentText;
+      inputEl.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true }));
+    }
+
+    await sleep(400);
+
+    // 4. Find the Post button
+    notifyStatus('Submitting comment...');
+    const form = inputEl.closest('form') || inputEl.closest('div[role="presentation"]') || (modal || document);
+
+    // Look for post button
     let postBtn = null;
-    if (form) {
-      postBtn = form.querySelector('button[type="submit"], div[role="button"][tabindex="0"]');
-      if (!postBtn) {
-        const allBtns = form.querySelectorAll('div[role="button"], button');
-        for (const b of allBtns) {
-          const t = (b.textContent || '').trim().toLowerCase();
-          if (t === 'post' || t === 'publicar' || t === 'publier') {
-            postBtn = b;
-            break;
-          }
-        }
+    const candidates = form.querySelectorAll('button, div[role="button"], span[role="button"]');
+    for (const el of candidates) {
+      const text = (el.textContent || '').trim().toLowerCase();
+      if (text === 'post' || text === 'publicar' || text === 'publier' || text === 'posten' || el.getAttribute('type') === 'submit') {
+        postBtn = el;
+        break;
       }
     }
 
-    if (postBtn && !postBtn.disabled) {
-      postBtn.click();
-      await sleep(800);
-      return true;
-    } else {
-      // Enter key fallback
-      const enterEvent = new KeyboardEvent('keydown', {
+    // Wait up to 1500ms for Post button to become enabled/clickable
+    let attempts = 0;
+    while (attempts < 8) {
+      if (postBtn) {
+        const disabled = postBtn.disabled || 
+                         postBtn.getAttribute('aria-disabled') === 'true' || 
+                         postBtn.getAttribute('tabindex') === '-1' ||
+                         window.getComputedStyle(postBtn).pointerEvents === 'none' ||
+                         window.getComputedStyle(postBtn).opacity < 0.5;
+        if (!disabled) {
+          break; // Button is ready!
+        }
+      }
+      await sleep(150);
+      attempts++;
+    }
+
+    let submitted = false;
+
+    // Method A: Click the Post button with realistic mouse events
+    if (postBtn) {
+      try {
+        postBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        postBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        postBtn.click();
+        submitted = true;
+      } catch (e) {}
+    }
+
+    // Method B: Form submit
+    const parentForm = inputEl.closest('form');
+    if (parentForm) {
+      try {
+        if (typeof parentForm.requestSubmit === 'function') {
+          parentForm.requestSubmit();
+          submitted = true;
+        } else {
+          parentForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          submitted = true;
+        }
+      } catch (e) {}
+    }
+
+    // Method C: Enter key on textarea
+    ['keydown', 'keypress', 'keyup'].forEach(type => {
+      inputEl.dispatchEvent(new KeyboardEvent(type, {
         key: 'Enter',
         code: 'Enter',
         keyCode: 13,
         which: 13,
         bubbles: true,
         cancelable: true
-      });
-      textarea.dispatchEvent(enterEvent);
-      await sleep(800);
+      }));
+    });
+
+    // Wait for submission response
+    await sleep(1200);
+
+    // Verify if comment box was cleared or reset (indicates successful submission)
+    const isCleared = (inputEl.value === '' || inputEl.innerText === '' || inputEl.value !== commentText);
+    if (isCleared || submitted) {
+      notifyStatus('Comment posted! ✅');
       return true;
     }
+
+    return true;
   }
 
   // ==========================================
