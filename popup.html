@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Insta Auto Liker</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="logo">
+        <svg class="heart-icon" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+        </svg>
+        <span class="title">Insta Auto Liker</span>
+      </div>
+      <span id="status-badge" class="badge idle">Idle</span>
+    </header>
+
+    <div class="stats-card">
+      <div class="stat-item">
+        <span class="stat-value" id="stat-liked">0</span>
+        <span class="stat-label">Liked</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-value" id="stat-skipped">0</span>
+        <span class="stat-label">Skipped</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-value" id="stat-processed">0</span>
+        <span class="stat-label">Total</span>
+      </div>
+    </div>
+
+    <div class="controls-section">
+      <button id="btn-start" class="btn btn-primary">
+        <span class="btn-icon">▶</span> Start Auto-Liking
+      </button>
+      <div class="btn-group">
+        <button id="btn-pause" class="btn btn-secondary" disabled>⏸ Pause</button>
+        <button id="btn-stop" class="btn btn-danger" disabled>⏹ Stop</button>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <h3>Speed Preset</h3>
+      <div class="speed-presets">
+        <button type="button" class="preset-btn" data-delay="0">⚡ 0s Instant</button>
+        <button type="button" class="preset-btn" data-delay="1">1s Fast</button>
+        <button type="button" class="preset-btn" data-delay="3">3s Safe</button>
+      </div>
+
+      <h3 style="margin-top: 6px;">Settings</h3>
+
+      <div class="form-row">
+        <label for="min-delay">Min Delay (sec):</label>
+        <input type="number" id="min-delay" min="0" max="60" step="0.5" value="0">
+      </div>
+
+      <div class="form-row">
+        <label for="max-delay">Max Delay (sec):</label>
+        <input type="number" id="max-delay" min="0" max="60" step="0.5" value="0">
+      </div>
+
+      <div class="form-row">
+        <label for="max-posts">Max Posts Limit:</label>
+        <input type="number" id="max-posts" min="0" max="1000" value="50" title="Set limit (0 = Unlimited)">
+      </div>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="skip-liked" checked>
+        <label for="skip-liked">Skip already liked posts</label>
+      </div>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="show-hud" checked>
+        <label for="show-hud">Show floating controller on page</label>
+      </div>
+    </div>
+
+    <div class="safety-tip">
+      <div class="tip-title">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+        Instant Speed Notice
+      </div>
+      <p>0s delay likes immediately. For large profiles (50+ posts), use 1s-3s to avoid Instagram action limits.</p>
+    </div>
+
+    <footer class="footer">
+      <div id="status-message" class="status-message">Open any Instagram profile to begin.</div>
+    </footer>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
