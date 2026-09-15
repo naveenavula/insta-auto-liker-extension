@@ -1,4 +1,4 @@
-﻿// popup.js - Insta Auto Liker & Commenter v1.3.0
+// popup.js - Insta Auto Liker & Commenter v1.3.0
 'use strict';
 
 let selectedMode = 'like';
@@ -143,6 +143,19 @@ btnSaveAi.addEventListener('click', () => {
     });
   });
 });
+
+const btnResetHistory = document.getElementById('btn-reset-history');
+if (btnResetHistory) {
+  btnResetHistory.addEventListener('click', () => {
+    sendToContent({ action: 'resetHistory' }, () => {
+      btnResetHistory.textContent = '✅ History Cleared!';
+      statLiked.textContent = '0';
+      statCommented.textContent = '0';
+      statSkipped.textContent = '0';
+      setTimeout(() => { btnResetHistory.textContent = '🔄 Reset Liked/Commented History'; }, 2000);
+    });
+  });
+}
 
 // ── Control Buttons ─────────────────────────────────────────
 btnStart.addEventListener('click', () => {

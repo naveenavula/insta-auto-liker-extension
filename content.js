@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // Insta Auto Liker & Commenter v1.3.0 - content.js
 // Complete Robust Engine: Auto-Like, Auto-Comment, Like+Comment,
 // Generate & Manual Post, Profile Traversal, Multi-Language Support
@@ -24,6 +24,9 @@
   let likedPostIds = new Set();
   let commentedPostIds = new Set();
   let usedCommentTexts = [];
+
+  // Session cache: tracks every post visited in the current run to prevent skips
+  const visitedThisSession = new Set();
 
   let aiConfig = {
     provider: 'offline',
@@ -230,13 +233,24 @@
   }
 
   async function openFirstPostIfOnProfile() {
-    if (isPostOpen()) return true;
+    if (isPostOpen()) {
+      const id = getPostId();
+      if (id) visitedThisSession.add(id);
+      return true;
+    }
 
     updateStatus('Finding first post on profile...', 'running');
     const postLinks = Array.from(document.querySelectorAll('main article a[href*="/p/"], main a[href*="/p/"], main a[href*="/reel/"], a[href*="/p/"]'));
     if (postLinks.length > 0) {
+      const first = postLinks[0];
+      const match = (first.getAttribute('href') || '').match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
+      if (match) visitedThisSession.add(match[2]);
+
       updateStatus('Opening first post...', 'running');
-      postLinks[0].click();
+      first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      await sleep(250);
+      first.click();
+
       for (let i = 0; i < 20; i++) {
         await sleep(200);
         if (isPostOpen()) {
@@ -474,76 +488,141 @@
     return true;
   }
 
-  function findNextChevronButton() {
-    const labels = ['next', 'siguiente', 'avançar', 'suivant', 'weiter', 'avanti', '다음'];
+  // ── PRECISE SEQUENTIAL NAVIGATION (Prevents Skipping) ──────
+  // The Next Post button is ALWAYS outside <article>.
+  // Inside <article> are carousel image buttons (which must be ignored!)
+  function findNextPostButton() {
+    const labels = ['next', 'siguiente', 'avançar', 'suivant', 'weiter', 'avanti', '다음', '次へ'];
 
-    const svgs = document.querySelectorAll('svg');
-    for (const svg of svgs) {
-      const label = (svg.getAttribute('aria-label') || '').trim().toLowerCase();
-      const title = (svg.querySelector('title')?.textContent || '').trim().toLowerCase();
-      if (labels.some(l => label === l || label.includes(l) || title === l || title.includes(l))) {
-        return svg.closest('button, [role="button"], a') || svg;
+    // 1. Direct buttons outside article
+    const buttons = document.querySelectorAll('button, [role="button"], a');
+    for (const btn of buttons) {
+      if (btn.closest('article')) continue; // Ignore carousel buttons inside post!
+
+      const label = (btn.getAttribute('aria-label') || '').trim().toLowerCase();
+      if (labels.some(l => label === l || label.includes(l))) {
+        return btn;
+      }
+
+      const svg = btn.querySelector('svg');
+      if (svg) {
+        const svgLabel = (svg.getAttribute('aria-label') || '').trim().toLowerCase();
+        const title = (svg.querySelector('title')?.textContent || '').trim().toLowerCase();
+        if (labels.some(l => svgLabel === l || svgLabel.includes(l) || title === l || title.includes(l))) {
+          return btn;
+        }
       }
     }
 
-    const btn = document.querySelector('button[aria-label*="Next" i], [aria-label*="Next" i], a[aria-label*="Next" i]');
-    if (btn) return btn;
+    // 2. Dialog sibling chevron buttons
+    const dialogSiblings = document.querySelectorAll('div[role="dialog"] ~ div button, div[role="dialog"] ~ button');
+    for (const btn of dialogSiblings) {
+      if (!btn.closest('article')) {
+        return btn;
+      }
+    }
 
     return null;
   }
 
+  async function clickNextGridPost() {
+    // 1. Close current modal so grid is fully accessible
+    const closeBtn = document.querySelector('svg[aria-label="Close" i], svg[aria-label="Fechar" i], svg[aria-label="Cerrar" i], [aria-label="Close" i]');
+    if (closeBtn) {
+      (closeBtn.closest('button, [role="button"]') || closeBtn).click();
+      await sleep(400);
+    } else {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+      await sleep(400);
+    }
+
+    // 2. Scan profile grid for next unvisited post
+    let scrollAttempts = 0;
+    while (scrollAttempts < 5) {
+      const allLinks = Array.from(document.querySelectorAll('main a[href*="/p/"], main a[href*="/reel/"]'));
+
+      for (const a of allLinks) {
+        const match = (a.getAttribute('href') || '').match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
+        if (match) {
+          const id = match[2];
+          if (!visitedThisSession.has(id)) {
+            visitedThisSession.add(id);
+            updateStatus(`Opening post #${id}...`, 'running');
+            a.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            await sleep(300);
+            a.click();
+
+            // Wait for modal to open
+            for (let w = 0; w < 15; w++) {
+              await sleep(150);
+              if (isPostOpen()) {
+                await sleep(600);
+                return true;
+              }
+            }
+            return true;
+          }
+        }
+      }
+
+      // If all currently visible links have been visited, scroll down to load more!
+      scrollAttempts++;
+      updateStatus(`Loading more profile posts (${scrollAttempts}/5)...`, 'running');
+      window.scrollBy({ top: 1000, behavior: 'smooth' });
+      await sleep(1400);
+    }
+
+    return false;
+  }
+
   async function advanceToNextPost() {
+    // Unfocus any active input
     if (document.activeElement && typeof document.activeElement.blur === 'function') {
       try { document.activeElement.blur(); } catch (e) {}
     }
     if (document.body) document.body.focus();
-    await sleep(200);
+    await sleep(250);
 
     const oldUrl = window.location.href;
     const oldId = getPostId();
 
-    const nextBtn = findNextChevronButton();
+    // Strategy 1: Click the True Next Post Button (Single action, NO simultaneous keyboard events!)
+    const nextBtn = findNextPostButton();
     if (nextBtn) {
       try {
         nextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
         nextBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
         nextBtn.click();
       } catch (e) {}
-    }
 
-    const arrowEvt = { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39, which: 39, bubbles: true, cancelable: true };
-    document.dispatchEvent(new KeyboardEvent('keydown', arrowEvt));
-    window.dispatchEvent(new KeyboardEvent('keydown', arrowEvt));
-    if (document.body) document.body.dispatchEvent(new KeyboardEvent('keydown', arrowEvt));
-
-    for (let i = 0; i < 12; i++) {
-      await sleep(150);
-      if (window.location.href !== oldUrl || (getPostId() && getPostId() !== oldId)) {
-        return true;
-      }
-    }
-
-    updateStatus('Finding next post in grid...', 'running');
-    const allLinks = Array.from(document.querySelectorAll('main a[href*="/p/"], main a[href*="/reel/"]'));
-    for (const a of allLinks) {
-      const match = (a.getAttribute('href') || '').match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
-      if (match) {
-        const id = match[2];
-        if (!likedPostIds.has(id) && !commentedPostIds.has(id)) {
-          const closeBtn = document.querySelector('svg[aria-label="Close" i], svg[aria-label="Fechar" i], svg[aria-label="Cerrar" i]');
-          if (closeBtn) {
-            (closeBtn.closest('button, [role="button"]') || closeBtn).click();
-            await sleep(400);
-          }
-          a.scrollIntoView({ block: 'center' });
-          a.click();
-          await sleep(1200);
+      // Wait to see if URL changed to exactly 1 new post
+      for (let i = 0; i < 10; i++) {
+        await sleep(150);
+        const newId = getPostId();
+        if ((newId && newId !== oldId) || (window.location.href !== oldUrl && !window.location.href.includes(oldId))) {
+          if (newId) visitedThisSession.add(newId);
+          await sleep(500); // Allow DOM of new post to stabilize
           return true;
         }
       }
     }
 
-    return false;
+    // Strategy 2: ONLY if button was missing or did not change URL, try ArrowRight ONCE
+    const arrowEvt = { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39, which: 39, bubbles: true, cancelable: true };
+    document.dispatchEvent(new KeyboardEvent('keydown', arrowEvt));
+    for (let i = 0; i < 10; i++) {
+      await sleep(150);
+      const newId = getPostId();
+      if ((newId && newId !== oldId) || (window.location.href !== oldUrl && !window.location.href.includes(oldId))) {
+        if (newId) visitedThisSession.add(newId);
+        await sleep(500);
+        return true;
+      }
+    }
+
+    // Strategy 3: Direct Sequential Grid Navigation (Clicks the exact next post thumbnail!)
+    updateStatus('Navigating via profile grid...', 'running');
+    return await clickNextGridPost();
   }
 
   const AUTHENTIC_COMMENTS = [
@@ -692,12 +771,14 @@ Post context: ${context}`;
       }
 
       const postId = getPostId();
+      if (postId) visitedThisSession.add(postId);
       updateStatus(`Post ${postId ? '#' + postId : 'processing...'}`, 'running');
       await sleep(400);
 
       if (STATE.mode === 'like' || STATE.mode === 'both') {
-        if (postId && likedPostIds.has(postId)) {
-          updateStatus('Already liked, skipping like', 'running');
+        const info = findLikeButtonElement();
+        if (info && info.isLiked) {
+          updateStatus('Already liked on Instagram ❤️', 'running');
         } else {
           updateStatus('Liking post ❤️...', 'running');
           const liked = await performLike();
@@ -798,6 +879,7 @@ Post context: ${context}`;
         STATE.liked = 0;
         STATE.commented = 0;
         STATE.skipped = 0;
+        visitedThisSession.clear(); // Fresh session tracking so it starts from post 1
         runMainLoop().catch(e => {
           console.error('[IAL] Engine error:', e);
           STATE.running = false;
@@ -816,6 +898,19 @@ Post context: ${context}`;
         STATE.paused = false;
         STATE.manualWaiting = false;
         updateStatus('Stopped', 'idle');
+        sendResponse({ ok: true });
+        break;
+
+      case 'resetHistory':
+        likedPostIds.clear();
+        commentedPostIds.clear();
+        visitedThisSession.clear();
+        chrome.storage.local.remove(['likedPostIds', 'commentedPostIds']);
+        STATE.liked = 0;
+        STATE.commented = 0;
+        STATE.skipped = 0;
+        updateHudNumbers();
+        updateStatus('History reset! Ready to process all posts.', 'idle');
         sendResponse({ ok: true });
         break;
 
