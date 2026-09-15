@@ -1,8 +1,8 @@
 ﻿{
   "manifest_version": 3,
   "name": "Insta Auto Liker & Commenter",
-  "version": "1.2.0",
-  "description": "Automatically like and/or comment on Instagram posts with AI-generated authentic comments.",
+  "version": "1.3.0",
+  "description": "Automatically like and/or comment on Instagram posts with unique AI-generated authentic comments.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": [
     "https://www.instagram.com/*",

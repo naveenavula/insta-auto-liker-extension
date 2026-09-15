@@ -1,11 +1,12 @@
-﻿// popup.js - Insta Auto Liker v1.2.0
+﻿// popup.js - Insta Auto Liker & Commenter v1.3.0
 'use strict';
 
 let selectedMode = 'like';
 let selectedDelayMs = 0;
-let pollInterval = null;
+let pollTimer = null;
+let currentTabId = null;
 
-// ── DOM refs ──────────────────────────────────────────────
+// DOM Elements
 const btnStart = document.getElementById('btn-start');
 const btnPause = document.getElementById('btn-pause');
 const btnStop = document.getElementById('btn-stop');
@@ -14,27 +15,86 @@ const currentStatus = document.getElementById('current-status');
 const statLiked = document.getElementById('stat-liked');
 const statCommented = document.getElementById('stat-commented');
 const statSkipped = document.getElementById('stat-skipped');
+const notInstaBanner = document.getElementById('not-insta-banner');
+const customDelay = document.getElementById('custom-delay');
+
+// AI Settings Elements
 const aiProvider = document.getElementById('ai-provider');
 const aiKey = document.getElementById('ai-key');
 const aiModel = document.getElementById('ai-model');
-const customDelay = document.getElementById('custom-delay');
+const btnSaveAi = document.getElementById('btn-save-ai');
 
-// ── Mode buttons ──────────────────────────────────────────
+// ── Tab Management & Injection ──────────────────────────────
+function getActiveInstagramTab(callback) {
+  chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+    const tab = tabs[0];
+    if (!tab || !tab.id) {
+      callback(null);
+      return;
+    }
+    currentTabId = tab.id;
+    const isInsta = tab.url && tab.url.includes('instagram.com');
+    if (!isInsta) {
+      if (notInstaBanner) notInstaBanner.style.display = 'block';
+      callback(null);
+      return;
+    }
+    if (notInstaBanner) notInstaBanner.style.display = 'none';
+    callback(tab);
+  });
+}
+
+function sendToContent(msg, callback) {
+  getActiveInstagramTab(tab => {
+    if (!tab) {
+      if (callback) callback(null);
+      return;
+    }
+
+    chrome.tabs.sendMessage(tab.id, msg, response => {
+      if (chrome.runtime.lastError) {
+        // Tab exists, but content script not yet injected (e.g. extension just updated)
+        console.log('[IAL Popup] Injecting content script dynamically...');
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content.js']
+        }, () => {
+          chrome.scripting.insertCSS({
+            target: { tabId: tab.id },
+            files: ['content.css']
+          }, () => {
+            setTimeout(() => {
+              chrome.tabs.sendMessage(tab.id, msg, res => {
+                if (callback) callback(res || null);
+              });
+            }, 300);
+          });
+        });
+      } else {
+        if (callback) callback(response);
+      }
+    });
+  });
+}
+
+// ── Mode Selector ───────────────────────────────────────────
 document.querySelectorAll('.mode-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     selectedMode = btn.dataset.mode;
+    chrome.storage.local.set({ mode: selectedMode });
   });
 });
 
-// ── Speed pills ───────────────────────────────────────────
+// ── Delay Presets ───────────────────────────────────────────
 document.querySelectorAll('.speed-pill').forEach(pill => {
   pill.addEventListener('click', () => {
     document.querySelectorAll('.speed-pill').forEach(p => p.classList.remove('active'));
     pill.classList.add('active');
     selectedDelayMs = parseInt(pill.dataset.ms, 10);
     customDelay.value = '';
+    chrome.storage.local.set({ delayMs: selectedDelayMs });
   });
 });
 
@@ -43,73 +103,81 @@ customDelay.addEventListener('input', () => {
   if (!isNaN(v) && v >= 0) {
     selectedDelayMs = v;
     document.querySelectorAll('.speed-pill').forEach(p => p.classList.remove('active'));
+    chrome.storage.local.set({ delayMs: selectedDelayMs });
   }
 });
 
-// ── Load saved settings ───────────────────────────────────
-chrome.storage.local.get(['aiProvider', 'aiKey', 'aiModel', 'delayMs'], r => {
-  if (r.aiProvider) aiProvider.value = r.aiProvider;
-  if (r.aiKey) aiKey.value = r.aiKey;
-  if (r.aiModel) aiModel.value = r.aiModel;
+// ── Load Settings ───────────────────────────────────────────
+chrome.storage.local.get(['mode', 'delayMs', 'aiProvider', 'aiKey', 'aiModel'], r => {
+  if (r.mode) {
+    selectedMode = r.mode;
+    document.querySelectorAll('.mode-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === r.mode);
+    });
+  }
   if (typeof r.delayMs === 'number') {
     selectedDelayMs = r.delayMs;
     customDelay.value = r.delayMs;
-    // Highlight matching pill
     document.querySelectorAll('.speed-pill').forEach(p => {
-      if (parseInt(p.dataset.ms, 10) === r.delayMs) {
-        p.classList.add('active');
-        customDelay.value = '';
-      }
+      p.classList.toggle('active', parseInt(p.dataset.ms, 10) === r.delayMs);
     });
   }
+  if (r.aiProvider && aiProvider) aiProvider.value = r.aiProvider;
+  if (r.aiKey && aiKey) aiKey.value = r.aiKey;
+  if (r.aiModel && aiModel) aiModel.value = r.aiModel;
 });
 
-// ── Save AI settings ──────────────────────────────────────
-document.getElementById('btn-save-ai').addEventListener('click', () => {
-  sendToContent({
-    action: 'saveSettings',
+// ── Save AI Settings ────────────────────────────────────────
+btnSaveAi.addEventListener('click', () => {
+  const settings = {
     aiProvider: aiProvider.value,
-    aiKey: aiKey.value,
-    aiModel: aiModel.value,
+    aiKey: aiKey.value.trim(),
+    aiModel: aiModel.value.trim(),
     delayMs: selectedDelayMs,
-  }, () => {
-    const btn = document.getElementById('btn-save-ai');
-    btn.textContent = '✅ Saved!';
-    setTimeout(() => { btn.textContent = '💾 Save AI Settings'; }, 2000);
+  };
+
+  sendToContent({ action: 'saveSettings', ...settings }, () => {
+    chrome.storage.local.set(settings, () => {
+      btnSaveAi.textContent = '✅ Saved Successfully!';
+      setTimeout(() => { btnSaveAi.textContent = '💾 Save AI Settings'; }, 2000);
+    });
   });
 });
 
-// ── Controls ──────────────────────────────────────────────
+// ── Control Buttons ─────────────────────────────────────────
 btnStart.addEventListener('click', () => {
+  setRunning(true);
   sendToContent({
     action: 'start',
     mode: selectedMode,
     delayMs: selectedDelayMs,
   }, () => {
-    setRunning(true);
-    startPolling();
+    startStatusPolling();
   });
 });
 
 btnPause.addEventListener('click', () => {
-  sendToContent({ action: 'pause' }, r => {
-    if (r) btnPause.textContent = r.paused ? '▶ Resume' : '⏸ Pause';
+  sendToContent({ action: 'pause' }, res => {
+    if (res) {
+      btnPause.textContent = res.paused ? '▶ Resume' : '⏸ Pause';
+    }
   });
 });
 
 btnStop.addEventListener('click', () => {
   sendToContent({ action: 'stop' }, () => {
     setRunning(false);
-    stopPolling();
+    stopStatusPolling();
   });
 });
 
-// ── Helpers ───────────────────────────────────────────────
+// ── Status & Stats Polling ──────────────────────────────────
 function setRunning(running) {
   btnStart.disabled = running;
   btnPause.disabled = !running;
   btnStop.disabled = !running;
   btnPause.textContent = '⏸ Pause';
+
   if (running) {
     statusBadge.textContent = 'Running';
     statusBadge.className = 'badge badge-running';
@@ -119,59 +187,53 @@ function setRunning(running) {
   }
 }
 
-function updateStats(r) {
-  if (!r) return;
-  statLiked.textContent = r.liked || 0;
-  statCommented.textContent = r.commented || 0;
-  statSkipped.textContent = r.skipped || 0;
-  if (r.status) currentStatus.textContent = r.status;
-  if (r.running) {
-    statusBadge.textContent = r.paused ? 'Paused' : 'Running';
-    statusBadge.className = r.paused ? 'badge badge-paused' : 'badge badge-running';
+function updateUIWithStatus(status) {
+  if (!status) return;
+
+  statLiked.textContent = status.liked || 0;
+  statCommented.textContent = status.commented || 0;
+  statSkipped.textContent = status.skipped || 0;
+  if (status.status) currentStatus.textContent = status.status;
+
+  if (status.running) {
+    statusBadge.textContent = status.paused ? 'Paused' : 'Running';
+    statusBadge.className = status.paused ? 'badge badge-paused' : 'badge badge-running';
+    btnStart.disabled = true;
+    btnPause.disabled = false;
+    btnStop.disabled = false;
+    btnPause.textContent = status.paused ? '▶ Resume' : '⏸ Pause';
   } else {
     statusBadge.textContent = 'Idle';
     statusBadge.className = 'badge badge-idle';
-    setRunning(false);
-    stopPolling();
+    btnStart.disabled = false;
+    btnPause.disabled = true;
+    btnStop.disabled = true;
+    stopStatusPolling();
   }
 }
 
-function startPolling() {
-  if (pollInterval) clearInterval(pollInterval);
-  pollInterval = setInterval(() => {
-    sendToContent({ action: 'getStatus' }, updateStats);
-  }, 1000);
+function startStatusPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => {
+    sendToContent({ action: 'getStatus' }, updateUIWithStatus);
+  }, 800);
 }
 
-function stopPolling() {
-  if (pollInterval) {
-    clearInterval(pollInterval);
-    pollInterval = null;
+function stopStatusPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
   }
 }
 
-function sendToContent(msg, cb) {
-  chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-    if (!tabs[0]) { if (cb) cb(null); return; }
-    chrome.tabs.sendMessage(tabs[0].id, msg, r => {
-      if (chrome.runtime.lastError) {
-        console.warn('[IAL Popup]', chrome.runtime.lastError.message);
-        if (cb) cb(null);
-        return;
-      }
-      if (cb) cb(r);
-    });
-  });
-}
-
-// ── Init: poll current status ─────────────────────────────
-sendToContent({ action: 'getStatus' }, r => {
-  if (r && r.running) {
+// Initial check
+sendToContent({ action: 'getStatus' }, status => {
+  if (status && status.running) {
     setRunning(true);
-    startPolling();
-    updateStats(r);
+    startStatusPolling();
+    updateUIWithStatus(status);
   }
 });
 
-// Also ensure HUD is visible
+// Also trigger in-page HUD
 sendToContent({ action: 'showHud' }, null);

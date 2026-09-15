@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Insta Auto Liker v1.2.0</title>
+  <title>Insta Auto Liker & Commenter v1.3.0</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
@@ -14,14 +14,19 @@
         <img src="icons/icon48.png" width="28" height="28" alt="logo" />
         <div>
           <div class="app-name">Auto Liker & Commenter</div>
-          <div class="version">v1.2.0</div>
+          <div class="version">v1.3.0</div>
         </div>
       </div>
       <div id="status-badge" class="badge badge-idle">Idle</div>
     </div>
 
+    <!-- Warning if not on Instagram -->
+    <div id="not-insta-banner" class="banner" style="display:none;">
+      ⚠️ Please switch to an <b>Instagram</b> tab to use this extension.
+    </div>
+
     <!-- Mode Selector -->
-    <div class="section-label">Mode</div>
+    <div class="section-label">Select Mode</div>
     <div class="mode-grid">
       <button class="mode-btn active" data-mode="like">
         <span class="mode-icon">❤️</span>
@@ -35,26 +40,26 @@
         <span class="mode-icon">🔥</span>
         <span>Like + Comment</span>
       </button>
-      <button class="mode-btn" data-mode="preview">
-        <span class="mode-icon">✨</span>
-        <span>Generate & Copy</span>
+      <button class="mode-btn" data-mode="manual_comment">
+        <span class="mode-icon">✍️</span>
+        <span>Generate & Manual</span>
       </button>
     </div>
 
-    <!-- Speed / Delay -->
-    <div class="section-label">Delay between posts</div>
+    <!-- Delay Selector -->
+    <div class="section-label">Delay Between Posts</div>
     <div class="speed-row">
-      <button class="speed-pill active" data-ms="0">Instant</button>
+      <button class="speed-pill active" data-ms="0">0s (Instant)</button>
       <button class="speed-pill" data-ms="1000">1s</button>
       <button class="speed-pill" data-ms="2000">2s</button>
-      <button class="speed-pill" data-ms="5000">5s</button>
+      <button class="speed-pill" data-ms="4000">4s</button>
     </div>
     <div class="custom-delay-row">
-      <input type="number" id="custom-delay" min="0" max="60000" placeholder="Custom ms" />
-      <span>ms</span>
+      <label>Custom ms:</label>
+      <input type="number" id="custom-delay" min="0" max="60000" placeholder="e.g. 1500" />
     </div>
 
-    <!-- Stats -->
+    <!-- Live Counters -->
     <div class="stats-row">
       <div class="stat-box">
         <div class="stat-num" id="stat-liked">0</div>
@@ -69,39 +74,39 @@
         <div class="stat-label">Skipped</div>
       </div>
     </div>
-    <div id="current-status" class="current-status">Idle</div>
+    <div id="current-status" class="current-status">Ready</div>
 
-    <!-- Controls -->
+    <!-- Main Controls -->
     <div class="controls">
       <button id="btn-start" class="btn btn-start">▶ Start</button>
       <button id="btn-pause" class="btn btn-pause" disabled>⏸ Pause</button>
       <button id="btn-stop" class="btn btn-stop" disabled>⏹ Stop</button>
     </div>
 
-    <!-- AI Settings (collapsible) -->
+    <!-- AI Settings (Collapsible) -->
     <details class="ai-section">
-      <summary>🤖 AI Settings (for comments)</summary>
+      <summary>🤖 AI Comment Settings</summary>
       <div class="ai-body">
         <div class="ai-row">
           <label>Provider</label>
           <select id="ai-provider">
-            <option value="offline">Offline (built-in)</option>
-            <option value="gemini">Gemini (Google)</option>
-            <option value="openai">OpenAI (ChatGPT)</option>
-            <option value="openrouter">OpenRouter (Free models)</option>
+            <option value="offline">Offline (Built-in 60+ Authentic phrases)</option>
+            <option value="gemini">Google Gemini (API Key required)</option>
+            <option value="openai">OpenAI ChatGPT (API Key required)</option>
+            <option value="openrouter">OpenRouter (Free/Paid models)</option>
           </select>
         </div>
         <div class="ai-row">
           <label>API Key</label>
-          <input type="password" id="ai-key" placeholder="Paste your API key" />
+          <input type="password" id="ai-key" placeholder="Paste your API key here" />
         </div>
         <div class="ai-row">
           <label>Model</label>
-          <input type="text" id="ai-model" placeholder="e.g. gemini-1.5-flash" />
+          <input type="text" id="ai-model" placeholder="Default: gemini-1.5-flash / gpt-4o-mini" />
         </div>
         <button id="btn-save-ai" class="btn btn-save">💾 Save AI Settings</button>
         <div class="ai-hint">
-          Leave provider as "Offline" if you don't have an API key — it uses 70+ built-in authentic phrases.
+          💡 By default, <b>Offline mode</b> is active and works instantly without needing any API key. All comments are guaranteed unique and authentic.
         </div>
       </div>
     </details>
