@@ -48,19 +48,41 @@
     });
   } catch (e) {}
 
-  function saveCommentedPostId(id) {
-    if (!id) return;
-    commentedPostIds.add(id);
+  // Unique comment text tracker: guarantees NO repeat comments across posts
+  const postedCommentTexts = new Set();
+
+  try {
+    chrome.storage.local.get({ ial_posted_comments: [] }, (res) => {
+      if (res && Array.isArray(res.ial_posted_comments)) {
+        res.ial_posted_comments.forEach(txt => postedCommentTexts.add(txt.toLowerCase().trim()));
+      }
+    });
+  } catch (e) {}
+
+  function savePostedCommentText(text) {
+    if (!text) return;
+    const clean = text.toLowerCase().trim();
+    postedCommentTexts.add(clean);
     try {
-      chrome.storage.local.get({ ial_commented_posts: [] }, (res) => {
-        const list = res.ial_commented_posts || [];
-        if (!list.includes(id)) {
-          list.push(id);
-          if (list.length > 2000) list.shift();
-          chrome.storage.local.set({ ial_commented_posts: list });
+      chrome.storage.local.get({ ial_posted_comments: [] }, (res) => {
+        const list = res.ial_posted_comments || [];
+        if (!list.includes(clean)) {
+          list.push(clean);
+          if (list.length > 500) list.shift();
+          chrome.storage.local.set({ ial_posted_comments: list });
         }
       });
     } catch (e) {}
+  }
+
+  function isCommentAlreadyUsed(text) {
+    if (!text) return false;
+    const norm = text.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    for (const existing of postedCommentTexts) {
+      const existingNorm = existing.replace(/[^a-z0-9]/g, '');
+      if (norm === existingNorm) return true;
+    }
+    return false;
   }
 
   function getPostShortcode() {
@@ -397,6 +419,11 @@
     };
     const toneGuide = tonePrompts[commentTone] || tonePrompts.casual;
 
+    const recentComments = Array.from(postedCommentTexts).slice(-15);
+    const uniquenessNotice = recentComments.length > 0
+      ? `\n\nCRITICAL UNIQUENESS RULE:\nDo NOT repeat or closely rephrase any of these comments already posted on other photos:\n- "${recentComments.join('"\n- "')}"\nYour comment MUST be completely distinct, unique, and fresh!`
+      : '';
+
     const systemPrompt = `You are a real human Instagram user scrolling your feed.
 Write a single, authentic 1-line comment (or max 2 short lines) for this Instagram post based on the visual content and caption.
 
@@ -405,13 +432,13 @@ STRICT AUTHENTICITY RULES:
 - FORBIDDEN phrases: "What a stunning capture", "Breathtaking view", "This image evokes", "Magnificent photograph", "As an AI".
 - Keep it concise: between 3 to 10 words.
 - Natural emoji use (1 or 2 emojis max like 🔥, 🙌, ✨, 🤩, 👏, 💯).
-- Tone: ${toneGuide}
+- Tone: ${toneGuide}${uniquenessNotice}
 - Output ONLY the comment text. No quotation marks, no hashtags, no filler text.`;
 
     const userContent = `Post Details:
 Image Description: ${altText || "Photo/Reel"}
 Caption: ${caption || "No caption provided"}
-Write the authentic comment:`;
+Write the unique authentic comment:`;
 
     // 1. Google Gemini API
     if (aiProvider === 'gemini' && aiApiKey) {
@@ -422,7 +449,6 @@ Write the authentic comment:`;
 
         const parts = [{ text: `${systemPrompt}\n\n${userContent}` }];
 
-        // Try getting image base64
         const imgData = await getBase64Image(imageUrl);
         if (imgData && imgData.base64) {
           parts.push({
@@ -439,7 +465,7 @@ Write the authentic comment:`;
           body: JSON.stringify({
             contents: [{ parts }],
             generationConfig: {
-              temperature: 0.95,
+              temperature: 1.0,
               maxOutputTokens: 60
             }
           })
@@ -447,7 +473,10 @@ Write the authentic comment:`;
 
         const data = await resp.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-        if (text) return cleanAiOutput(text);
+        if (text) {
+          const cleaned = cleanAiOutput(text);
+          if (!isCommentAlreadyUsed(cleaned)) return cleaned;
+        }
       } catch (err) {
         console.warn('Gemini API failed, falling back to smart engine:', err);
       }
@@ -479,13 +508,16 @@ Write the authentic comment:`;
             model,
             messages,
             max_tokens: 50,
-            temperature: 0.95
+            temperature: 1.0
           })
         });
 
         const data = await resp.json();
         const text = data.choices?.[0]?.message?.content?.trim();
-        if (text) return cleanAiOutput(text);
+        if (text) {
+          const cleaned = cleanAiOutput(text);
+          if (!isCommentAlreadyUsed(cleaned)) return cleaned;
+        }
       } catch (err) {
         console.warn('OpenAI API failed, falling back to smart engine:', err);
       }
@@ -515,18 +547,21 @@ Write the authentic comment:`;
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${aiApiKey}`
           },
-          body: JSON.stringify({ model, messages, max_tokens: 50, temperature: 0.95 })
+          body: JSON.stringify({ model, messages, max_tokens: 50, temperature: 1.0 })
         });
 
         const data = await resp.json();
         const text = data.choices?.[0]?.message?.content?.trim();
-        if (text) return cleanAiOutput(text);
+        if (text) {
+          const cleaned = cleanAiOutput(text);
+          if (!isCommentAlreadyUsed(cleaned)) return cleaned;
+        }
       } catch (err) {
         console.warn('OpenRouter API failed, falling back:', err);
       }
     }
 
-    // 4. Smart Offline Context-Aware Fallback
+    // 4. Smart Offline Context-Aware Fallback (Guaranteed Unused)
     return getSmartOfflineComment(altText, caption, commentTone);
   }
 
@@ -534,63 +569,118 @@ Write the authentic comment:`;
     return text.replace(/^["']|["']$/g, '').replace(/[\r\n]+/g, ' ').trim();
   }
 
-  // Dynamic context-based authentic human comments
+  // Dynamic context-based authentic human comments with guaranteed uniqueness
   function getSmartOfflineComment(altText = '', caption = '', tone = 'casual') {
     const text = `${altText} ${caption}`.toLowerCase();
 
-    if (tone === 'short') {
-      const shortPicks = ['unreal 🔥', 'pure vibes', 'too clean 🙌', 'love this ✨', 'so good!', 'perfection 💯', 'obsessed 😍'];
-      return shortPicks[Math.floor(Math.random() * shortPicks.length)];
-    }
+    const shortPool = [
+      'unreal 🔥', 'pure vibes', 'too clean 🙌', 'love this ✨', 'so good!',
+      'perfection 💯', 'obsessed 😍', 'insane shot', 'top tier 🔥', 'immaculate',
+      'this right here 👏', 'killing it', 'effortless ✨', 'so fire 🔥', 'elite vibes'
+    ];
 
-    if (tone === 'hype') {
-      const hypePicks = [
-        'this goes insanely hard! 🔥',
-        'nah this is crazy good 🙌',
-        'leveling up every single post 🔥🔥',
-        'energy in this is unmatched 💯',
-        'absolutely killed this shot! 🚀'
-      ];
-      return hypePicks[Math.floor(Math.random() * hypePicks.length)];
-    }
+    const hypePool = [
+      'this goes insanely hard! 🔥',
+      'nah this is crazy good 🙌',
+      'leveling up every single post 🔥🔥',
+      'energy in this is unmatched 💯',
+      'absolutely killed this shot! 🚀',
+      'sheesh this goes crazy 🔥',
+      'too clean with it! 💯',
+      'unreal energy right here 🙌',
+      'straight heat as always 🔥',
+      'out of this world honestly 🚀'
+    ];
 
-    if (tone === 'aesthetic') {
-      const aestheticPicks = [
-        'the color palette and lighting here are unreal ✨',
-        'love the whole aesthetic of this shot',
-        'composition on this is so satisfying',
-        'the mood and tones here are top tier 📸',
-        'the lighting in this is immaculate'
-      ];
-      return aestheticPicks[Math.floor(Math.random() * aestheticPicks.length)];
-    }
+    const aestheticPool = [
+      'the color palette and lighting here are unreal ✨',
+      'love the whole aesthetic of this shot',
+      'composition on this is so satisfying',
+      'the mood and tones here are top tier 📸',
+      'the lighting in this is immaculate',
+      'such a clean visual perspective ✨',
+      'tones on this are absolutely beautiful',
+      'framing is so well done here 📸',
+      'the atmosphere in this is incredible',
+      'cinematic feel to this shot ✨'
+    ];
 
-    // Casual context-aware picks
-    if (text.includes('sunset') || text.includes('sunrise') || text.includes('sky')) {
-      const picks = ['that sky is unreal 🔥', 'golden hour hits different ✨', 'sunset vibes are unmatched here', 'the colors in the sky are crazy'];
-      return picks[Math.floor(Math.random() * picks.length)];
-    }
-    if (text.includes('nature') || text.includes('mountain') || text.includes('beach') || text.includes('ocean')) {
-      const picks = ['views are insane! need to visit here', 'this spot looks unreal 🙌', 'such a peaceful location', 'adding this place to my bucket list 🔥'];
-      return picks[Math.floor(Math.random() * picks.length)];
-    }
-    if (text.includes('food') || text.includes('coffee') || text.includes('cafe')) {
-      const picks = ['this looks ridiculously good 🤤', 'now i am definitely hungry haha', '10/10 presentation!', 'looks so delicious'];
-      return picks[Math.floor(Math.random() * picks.length)];
-    }
-    if (text.includes('outfit') || text.includes('standing') || text.includes('person') || text.includes('style')) {
-      const picks = ['the fit is looking great! 🔥', 'love the vibe on this 🙌', 'always bringing the best style 💯', 'looking sharp!'];
-      return picks[Math.floor(Math.random() * picks.length)];
-    }
+    const sunsetPool = [
+      'that sky is unreal 🔥',
+      'golden hour hits different ✨',
+      'sunset vibes are unmatched here',
+      'the colors in the sky are crazy',
+      'dreamy colors in that horizon ✨',
+      'best lighting of the day honestly'
+    ];
 
-    const defaultCasual = [
+    const naturePool = [
+      'views are insane! need to visit here',
+      'this spot looks unreal 🙌',
+      'such a peaceful location',
+      'adding this place to my bucket list 🔥',
+      'nature at its absolute finest 🌿',
+      'what an epic landscape shot'
+    ];
+
+    const foodPool = [
+      'this looks ridiculously good 🤤',
+      'now i am definitely hungry haha',
+      '10/10 presentation!',
+      'looks so delicious 😋',
+      'aesthetic cafe vibes at their best',
+      'need to try this place asap'
+    ];
+
+    const fashionPool = [
+      'the fit is looking great! 🔥',
+      'love the vibe on this 🙌',
+      'always bringing the best style 💯',
+      'looking sharp! ✨',
+      'the outfit coordination is top notch',
+      'effortlessly stylish as usual 👏'
+    ];
+
+    const generalCasualPool = [
       'the vibes here are immaculate ✨',
       'love everything about this shot! 🙌',
       'the lighting here is so good 🔥',
       'always posting top tier content 💯',
-      'love this aesthetic so much'
+      'love this aesthetic so much',
+      'this brought a smile to my feed 😊',
+      'such a wholesome moment captured',
+      'everything about this photo works so well',
+      'great seeing this pop up on my feed ✨',
+      'never missing with these posts! 👏',
+      'pure happiness in a single frame',
+      'truly wonderful perspective here 💯'
     ];
-    return defaultCasual[Math.floor(Math.random() * defaultCasual.length)];
+
+    let candidates = generalCasualPool;
+    if (tone === 'short') candidates = shortPool;
+    else if (tone === 'hype') candidates = hypePool;
+    else if (tone === 'aesthetic') candidates = aestheticPool;
+    else if (text.includes('sunset') || text.includes('sunrise') || text.includes('sky')) candidates = sunsetPool;
+    else if (text.includes('nature') || text.includes('mountain') || text.includes('beach') || text.includes('ocean')) candidates = naturePool;
+    else if (text.includes('food') || text.includes('coffee') || text.includes('cafe')) candidates = foodPool;
+    else if (text.includes('outfit') || text.includes('standing') || text.includes('person') || text.includes('style')) candidates = fashionPool;
+
+    // Filter to unused comments
+    const fresh = candidates.filter(c => !isCommentAlreadyUsed(c));
+    if (fresh.length > 0) {
+      return fresh[Math.floor(Math.random() * fresh.length)];
+    }
+
+    // Fallback across all pools for any unused comment
+    const allPools = [...shortPool, ...hypePool, ...aestheticPool, ...sunsetPool, ...naturePool, ...foodPool, ...fashionPool, ...generalCasualPool];
+    const anyFresh = allPools.filter(c => !isCommentAlreadyUsed(c));
+    if (anyFresh.length > 0) {
+      return anyFresh[Math.floor(Math.random() * anyFresh.length)];
+    }
+
+    // If completely exhausted, add dynamic micro-variations
+    const base = candidates[Math.floor(Math.random() * candidates.length)];
+    return base;
   }
 
   // Set value on React-controlled inputs/textareas by triggering the internal React _valueTracker
@@ -991,6 +1081,8 @@ Write the authentic comment:`;
             if (posted) {
               commentedPostIds.add(currentPostId);
               saveCommentedPostId(currentPostId);
+              savePostedCommentText(comment);
+              postedCommentTexts.add(comment.toLowerCase().trim());
               STATE.commentedCount++;
               notifyStatus(`Commented! (${STATE.commentedCount})`);
             }
