@@ -1,295 +1,140 @@
-/* Floating HUD on Instagram page */
-#ial-floating-hud {
+﻿/* content.css - Insta Auto Liker HUD v1.2.0 */
+
+#ial-hud {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
+  top: 80px;
+  right: 16px;
+  width: 240px;
+  background: rgba(10, 10, 10, 0.96);
+  border: 1px solid #333;
+  border-radius: 12px;
+  padding: 12px;
   z-index: 2147483647;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background: rgba(18, 18, 18, 0.95);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.65);
-  border-radius: 14px;
-  width: 320px;
-  overflow: hidden;
-  transition: transform 0.25s ease, opacity 0.25s ease, height 0.25s ease;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  color: #f0f0f0;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  backdrop-filter: blur(12px);
   user-select: none;
-  font-size: 13px;
-  box-sizing: border-box;
 }
 
-#ial-floating-hud * {
-  box-sizing: border-box;
-}
-
-#ial-floating-hud.hidden {
-  display: none !important;
-}
-
-#ial-floating-hud.minimized {
-  width: auto;
-  border-radius: 30px;
-}
-
-#ial-floating-hud.minimized .ial-body {
-  display: none;
-}
-
-#ial-floating-hud.minimized .ial-header {
-  padding: 8px 14px;
-  border-bottom: none;
-}
-
-.ial-header {
+#ial-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
-  background: rgba(255, 255, 255, 0.04);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  cursor: grab;
+  margin-bottom: 8px;
+  cursor: move;
 }
 
-.ial-brand {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+#ial-title {
   font-weight: 700;
   font-size: 13px;
+  color: #e1306c;
 }
 
-.ial-brand-gradient {
-  background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+#ial-close {
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
 }
+#ial-close:hover { color: #e1306c; }
 
-.ial-brand-icon {
-  width: 16px;
-  height: 16px;
-  fill: #ff3040;
-}
-
-.ial-header-actions {
+#ial-status-row {
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-bottom: 8px;
 }
 
-.ial-btn-icon {
-  background: transparent;
-  border: none;
-  color: #a0a0a0;
-  cursor: pointer;
-  padding: 2px;
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-idle { background: #555; }
+.dot-running { background: #4caf50; animation: pulse 1.2s infinite; }
+.dot-paused { background: #ffc107; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+#ial-status-text {
+  font-size: 11px;
+  color: #ccc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#ial-stats {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  border-radius: 4px;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
-.ial-btn-icon:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.ial-body {
-  padding: 12px 14px;
+.ial-stat {
+  flex: 1;
+  text-align: center;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 8px;
+  padding: 6px 4px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 2px;
 }
 
-/* Mode Switcher on HUD */
-.ial-mode-row {
-  display: flex;
-  gap: 5px;
-}
-
-.ial-mode-btn {
-  flex: 1;
-  background: #252525;
-  color: #b0b0b0;
-  border: 1px solid #3d3d3d;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 5px 4px;
-  border-radius: 8px;
-  cursor: pointer;
-  text-align: center;
-  transition: all 0.15s ease;
-}
-
-.ial-mode-btn:hover {
-  background: #333;
-  color: #fff;
-}
-
-.ial-mode-btn.active {
-  background: linear-gradient(45deg, #e1306c, #fd1d1d);
-  color: #fff;
-  border-color: transparent;
-}
-
-/* Stats */
-.ial-stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1fr;
-  gap: 4px;
-  background: rgba(0, 0, 0, 0.35);
-  padding: 8px 6px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  text-align: center;
-}
-
-.ial-stat-number {
-  font-size: 15px;
+.ial-stat span {
+  font-size: 18px;
   font-weight: 700;
-  color: #fff;
+  color: #e1306c;
 }
 
-.ial-stat-title {
+.ial-stat small {
   font-size: 9px;
-  color: #8e8e8e;
+  color: #666;
   text-transform: uppercase;
 }
 
-/* Speed / Delay row */
-.ial-delay-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: rgba(255, 255, 255, 0.04);
-  padding: 6px 10px;
+/* Preview box */
+#ial-preview-box {
+  background: #111;
+  border: 1px solid #2a2a2a;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 8px;
+  margin-top: 6px;
 }
 
-.ial-delay-label {
-  font-size: 11px;
-  color: #aaa;
-  font-weight: 600;
-}
-
-.ial-delay-pills {
-  display: flex;
-  gap: 4px;
-}
-
-.ial-pill-btn {
-  background: #252525;
-  color: #b0b0b0;
-  border: 1px solid #3d3d3d;
+#ial-preview-label {
   font-size: 10px;
-  font-weight: 600;
-  padding: 3px 7px;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.15s ease;
+  color: #888;
+  margin-bottom: 4px;
 }
 
-.ial-pill-btn:hover {
-  background: #333333;
-  color: #fff;
-}
-
-.ial-pill-btn.active {
-  background: linear-gradient(45deg, #e1306c, #fd1d1d);
-  color: #fff;
-  border-color: transparent;
-}
-
-.ial-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.ial-btn {
+#ial-preview-text {
   font-size: 12px;
-  font-weight: 600;
-  border-radius: 8px;
-  padding: 8px 10px;
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  transition: all 0.15s ease;
+  color: #f0f0f0;
+  line-height: 1.4;
+  margin-bottom: 6px;
+  word-wrap: break-word;
 }
 
-.ial-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.ial-btn-primary {
-  background: linear-gradient(45deg, #e1306c, #fd1d1d);
-  color: #ffffff;
-}
-
-.ial-btn-primary:hover:not(:disabled) {
-  opacity: 0.9;
-  transform: translateY(-1px);
-}
-
-.ial-sub-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.ial-sub-actions .ial-btn {
-  flex: 1;
-}
-
-.ial-btn-secondary {
-  background: rgba(255, 255, 255, 0.1);
-  color: #e5e5e5;
-}
-
-.ial-btn-secondary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.18);
-}
-
-.ial-btn-danger {
-  background: rgba(239, 68, 68, 0.2);
-  color: #fca5a5;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-}
-
-.ial-btn-danger:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.3);
-}
-
-.ial-status-bar {
-  font-size: 11px;
-  color: #a3a3a3;
-  background: rgba(255, 255, 255, 0.03);
-  padding: 6px 8px;
+#ial-copy-btn {
+  width: 100%;
+  padding: 6px;
+  background: #1a3a1a;
+  border: 1px solid #2a5a2a;
   border-radius: 6px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: center;
+  color: #4caf50;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
 }
-
-.ial-status-pulse {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background-color: #10b981;
-  margin-right: 5px;
-  animation: ialPulse 1.5s infinite;
-}
-
-@keyframes ialPulse {
-  0% { transform: scale(0.9); opacity: 0.7; }
-  50% { transform: scale(1.3); opacity: 1; }
-  100% { transform: scale(0.9); opacity: 0.7; }
-}
+#ial-copy-btn:hover { background: #224422; }

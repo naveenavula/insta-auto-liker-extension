@@ -1,1315 +1,696 @@
-// content.js - Instagram Profile Auto Liker & AI Commenter Engine (v1.1.0)
+﻿// ============================================================
+// Insta Auto Liker & Commenter v1.2.0 - content.js
+// Full rewrite: reliable liking, commenting, generate & preview
+// ============================================================
+(function () {
+  'use strict';
 
-(() => {
-  if (window.__INSTA_AUTO_BOT_INITIALIZED__) return;
-  window.__INSTA_AUTO_BOT_INITIALIZED__ = true;
+  if (window.__instaAutoLikerLoaded) return;
+  window.__instaAutoLikerLoaded = true;
 
+  // ── State ────────────────────────────────────────────────
   const STATE = {
-    status: 'idle', // 'idle' | 'running' | 'paused' | 'stopped' | 'done'
-    likedCount: 0,
-    commentedCount: 0,
-    skippedCount: 0,
-    currentPostUrl: '',
-    message: 'Ready. Open a profile to start.',
-    settings: {
-      mode: 'both', // 'both' | 'like' | 'comment'
-      minDelay: 0,
-      maxDelay: 0,
-      maxPosts: 50,
-      skipLiked: true,
-      showHud: true,
-      aiProvider: 'gemini',
-      aiApiKey: '',
-      aiModel: 'gemini-1.5-flash',
-      aiEndpoint: '',
-      commentTone: 'casual'
-    }
+    running: false,
+    paused: false,
+    mode: 'like',        // 'like' | 'comment' | 'both' | 'preview'
+    liked: 0,
+    commented: 0,
+    skipped: 0,
+    currentStatus: 'Idle',
+    delayMs: 1500,
   };
 
-  let isStopRequested = false;
-  let isPauseRequested = false;
-  let loopActive = false;
+  // Persistent sets loaded from chrome.storage.local
+  let likedPostIds = new Set();
+  let commentedPostIds = new Set();
+  let usedCommentTexts = [];  // ordered array, keep last 30
 
-  function cleanDelay(val, defaultVal = 0) {
-    let n = parseFloat(val);
-    if (isNaN(n) || n < 0) return defaultVal;
-    if (n >= 100) n = n / 1000;
-    return Math.min(30, Math.max(0, n));
-  }
+  // ── Settings ─────────────────────────────────────────────
+  let aiProvider = 'gemini';
+  let aiKey = '';
+  let aiModel = '';
 
-  // Deduplication tracker: guarantees strictly 1 comment per post
-  const commentedPostIds = new Set();
-
-  try {
-    chrome.storage.local.get({ ial_commented_posts: [] }, (res) => {
-      if (res && Array.isArray(res.ial_commented_posts)) {
-        res.ial_commented_posts.forEach(id => commentedPostIds.add(id));
-      }
-    });
-  } catch (e) {}
-
-  // Unique comment text tracker: guarantees NO repeat comments across posts
-  const postedCommentTexts = new Set();
-
-  try {
-    chrome.storage.local.get({ ial_posted_comments: [] }, (res) => {
-      if (res && Array.isArray(res.ial_posted_comments)) {
-        res.ial_posted_comments.forEach(txt => postedCommentTexts.add(txt.toLowerCase().trim()));
-      }
-    });
-  } catch (e) {}
-
-  function savePostedCommentText(text) {
-    if (!text) return;
-    const clean = text.toLowerCase().trim();
-    postedCommentTexts.add(clean);
-    try {
-      chrome.storage.local.get({ ial_posted_comments: [] }, (res) => {
-        const list = res.ial_posted_comments || [];
-        if (!list.includes(clean)) {
-          list.push(clean);
-          if (list.length > 500) list.shift();
-          chrome.storage.local.set({ ial_posted_comments: list });
+  function loadSettings() {
+    return new Promise(resolve => {
+      chrome.storage.local.get(
+        ['aiProvider', 'aiKey', 'aiModel', 'likedPostIds', 'commentedPostIds', 'usedCommentTexts', 'delayMs'],
+        r => {
+          aiProvider = r.aiProvider || 'offline';
+          aiKey = r.aiKey || '';
+          aiModel = r.aiModel || '';
+          STATE.delayMs = typeof r.delayMs === 'number' ? r.delayMs : 1500;
+          likedPostIds = new Set(r.likedPostIds || []);
+          commentedPostIds = new Set(r.commentedPostIds || []);
+          usedCommentTexts = r.usedCommentTexts || [];
+          resolve();
         }
-      });
-    } catch (e) {}
+      );
+    });
   }
 
-  function isCommentAlreadyUsed(text) {
-    if (!text) return false;
-    const norm = text.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-    for (const existing of postedCommentTexts) {
-      const existingNorm = existing.replace(/[^a-z0-9]/g, '');
-      if (norm === existingNorm) return true;
-    }
-    return false;
+  function saveIds() {
+    chrome.storage.local.set({
+      likedPostIds: [...likedPostIds],
+      commentedPostIds: [...commentedPostIds],
+      usedCommentTexts: usedCommentTexts,
+    });
   }
 
-  function getPostShortcode() {
-    const match = window.location.pathname.match(/\/(p|reel)\/([a-zA-Z0-9_-]+)/);
-    if (match) return match[2];
-    const link = document.querySelector('div[role="dialog"] a[href*="/p/"], div[role="dialog"] a[href*="/reel/"]');
-    if (link) {
-      const m = (link.getAttribute('href') || '').match(/\/(p|reel)\/([a-zA-Z0-9_-]+)/);
-      if (m) return m[2];
-    }
-    return window.location.pathname;
-  }
+  // ── HUD ──────────────────────────────────────────────────
+  let hud = null;
+  let hudStatus, hudLiked, hudCommented, hudSkipped, hudPreviewBox;
 
-  // Load saved settings
-  chrome.storage.sync.get(STATE.settings, (stored) => {
-    if (stored) {
-      STATE.settings = Object.assign(STATE.settings, stored);
-      STATE.settings.minDelay = cleanDelay(STATE.settings.minDelay, 0);
-      STATE.settings.maxDelay = cleanDelay(STATE.settings.maxDelay, 0);
-      updateHudVisibility();
-      updateSpeedPills();
-      updateModePills();
-      updateHudUi();
-    }
-  });
-
-  // ==========================================
-  // Floating HUD (On-Screen Controller)
-  // ==========================================
   function createHud() {
-    if (document.getElementById('ial-floating-hud')) return;
+    if (document.getElementById('ial-hud')) return;
 
-    const hud = document.createElement('div');
-    hud.id = 'ial-floating-hud';
+    hud = document.createElement('div');
+    hud.id = 'ial-hud';
     hud.innerHTML = `
-      <div class="ial-header" id="ial-drag-header">
-        <div class="ial-brand">
-          <svg class="ial-brand-icon" viewBox="0 0 24 24">
-            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
-          </svg>
-          <span class="ial-brand-gradient">Auto Bot</span>
-          <span style="font-size: 10px; color: #888;">v1.1.4</span>
-        </div>
-        <div class="ial-header-actions">
-          <button class="ial-btn-icon" id="ial-btn-toggle" title="Minimize / Expand">_</button>
-        </div>
+      <div id="ial-header">
+        <span id="ial-title">🤖 Auto Liker v1.2</span>
+        <button id="ial-close">✕</button>
       </div>
-      <div class="ial-body">
-        <!-- Mode Switcher -->
-        <div class="ial-mode-row" id="ial-mode-pills">
-          <button class="ial-mode-btn" data-mode="both">❤️+💬 Both</button>
-          <button class="ial-mode-btn" data-mode="like">❤️ Like</button>
-          <button class="ial-mode-btn" data-mode="comment">💬 Comment</button>
-        </div>
-
-        <!-- 4-Stat Grid -->
-        <div class="ial-stats">
-          <div>
-            <div class="ial-stat-number" id="ial-stat-liked">0</div>
-            <div class="ial-stat-title">Liked</div>
-          </div>
-          <div>
-            <div class="ial-stat-number" id="ial-stat-commented">0</div>
-            <div class="ial-stat-title">Commented</div>
-          </div>
-          <div>
-            <div class="ial-stat-number" id="ial-stat-skipped">0</div>
-            <div class="ial-stat-title">Skipped</div>
-          </div>
-          <div>
-            <div class="ial-stat-number" id="ial-stat-limit">50</div>
-            <div class="ial-stat-title">Limit</div>
-          </div>
-        </div>
-
-        <!-- Speed Selector -->
-        <div class="ial-delay-row">
-          <span class="ial-delay-label">Delay:</span>
-          <div class="ial-delay-pills" id="ial-speed-pills">
-            <button class="ial-pill-btn" data-delay="0">⚡ 0s</button>
-            <button class="ial-pill-btn" data-delay="1">1s</button>
-            <button class="ial-pill-btn" data-delay="3">3s</button>
-          </div>
-        </div>
-
-        <!-- Action Buttons -->
-        <div class="ial-actions">
-          <button class="ial-btn ial-btn-primary" id="ial-hud-start">
-            <span>▶</span> <span id="ial-hud-start-text">Start Both</span>
-          </button>
-          <div class="ial-sub-actions">
-            <button class="ial-btn ial-btn-secondary" id="ial-hud-pause" disabled>⏸ Pause</button>
-            <button class="ial-btn ial-btn-danger" id="ial-hud-stop" disabled>⏹ Stop</button>
-          </div>
-        </div>
-        <div class="ial-status-bar" id="ial-hud-status">
-          <span class="ial-status-pulse"></span> Ready
-        </div>
+      <div id="ial-status-row">
+        <span id="ial-status-dot" class="dot dot-idle"></span>
+        <span id="ial-status-text">Idle</span>
+      </div>
+      <div id="ial-stats">
+        <div class="ial-stat"><span id="ial-liked">0</span><small>Liked</small></div>
+        <div class="ial-stat"><span id="ial-commented">0</span><small>Commented</small></div>
+        <div class="ial-stat"><span id="ial-skipped">0</span><small>Skipped</small></div>
+      </div>
+      <div id="ial-preview-box" style="display:none">
+        <div id="ial-preview-label">💬 Generated Comment:</div>
+        <div id="ial-preview-text"></div>
+        <button id="ial-copy-btn">📋 Copy</button>
       </div>
     `;
-
     document.body.appendChild(hud);
 
-    // Minimize toggle
-    const toggleBtn = hud.querySelector('#ial-btn-toggle');
-    toggleBtn.addEventListener('click', () => {
-      hud.classList.toggle('minimized');
-      toggleBtn.textContent = hud.classList.contains('minimized') ? '□' : '_';
+    hudStatus = document.getElementById('ial-status-text');
+    hudLiked = document.getElementById('ial-liked');
+    hudCommented = document.getElementById('ial-commented');
+    hudSkipped = document.getElementById('ial-skipped');
+    hudPreviewBox = document.getElementById('ial-preview-box');
+
+    document.getElementById('ial-close').addEventListener('click', () => {
+      hud.style.display = 'none';
     });
 
-    makeDraggable(hud, hud.querySelector('#ial-drag-header'));
-
-    // Mode Pills on HUD
-    hud.querySelectorAll('#ial-mode-pills .ial-mode-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        STATE.settings.mode = e.currentTarget.dataset.mode;
-        chrome.storage.sync.set({ mode: STATE.settings.mode });
-        updateModePills();
-        updateHudUi();
-        notifyStatus(`Mode: ${STATE.settings.mode.toUpperCase()}`);
+    document.getElementById('ial-copy-btn').addEventListener('click', () => {
+      const txt = document.getElementById('ial-preview-text').textContent;
+      navigator.clipboard.writeText(txt).then(() => {
+        document.getElementById('ial-copy-btn').textContent = '✅ Copied!';
+        setTimeout(() => { document.getElementById('ial-copy-btn').textContent = '📋 Copy'; }, 2000);
       });
     });
 
-    // Speed Pills on HUD
-    hud.querySelectorAll('#ial-speed-pills .ial-pill-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const sec = parseFloat(e.currentTarget.dataset.delay);
-        STATE.settings.minDelay = sec;
-        STATE.settings.maxDelay = sec === 0 ? 0 : sec + 1;
-        chrome.storage.sync.set({ minDelay: STATE.settings.minDelay, maxDelay: STATE.settings.maxDelay });
-        updateSpeedPills();
-        notifyStatus(`Delay set to ${sec}s`);
-      });
-    });
+    makeDraggable(hud);
+    updateHud();
+  }
 
-    // HUD Button Events
-    hud.querySelector('#ial-hud-start').addEventListener('click', () => {
-      if (STATE.status === 'paused') {
-        resumeLiking();
-      } else {
-        startLiking();
+  function makeDraggable(el) {
+    const header = el.querySelector('#ial-header');
+    let ox = 0, oy = 0, mx = 0, my = 0;
+    header.addEventListener('mousedown', e => {
+      e.preventDefault();
+      mx = e.clientX; my = e.clientY;
+      document.onmousemove = ev => {
+        ox = mx - ev.clientX; oy = my - ev.clientY;
+        mx = ev.clientX; my = ev.clientY;
+        el.style.top = (el.offsetTop - oy) + 'px';
+        el.style.left = (el.offsetLeft - ox) + 'px';
+        el.style.right = 'auto';
+        el.style.bottom = 'auto';
+      };
+      document.onmouseup = () => { document.onmousemove = null; document.onmouseup = null; };
+    });
+  }
+
+  function setStatus(msg, type = 'running') {
+    STATE.currentStatus = msg;
+    if (!hudStatus) return;
+    hudStatus.textContent = msg;
+    const dot = document.getElementById('ial-status-dot');
+    if (dot) {
+      dot.className = 'dot dot-' + type;
+    }
+  }
+
+  function updateHud() {
+    if (!hud) return;
+    if (hudLiked) hudLiked.textContent = STATE.liked;
+    if (hudCommented) hudCommented.textContent = STATE.commented;
+    if (hudSkipped) hudSkipped.textContent = STATE.skipped;
+  }
+
+  function showPreview(text) {
+    if (!hudPreviewBox) return;
+    document.getElementById('ial-preview-text').textContent = text;
+    hudPreviewBox.style.display = 'block';
+  }
+
+  function hidePreview() {
+    if (!hudPreviewBox) return;
+    hudPreviewBox.style.display = 'none';
+  }
+
+  // ── Sleep ────────────────────────────────────────────────
+  function sleep(ms) {
+    return new Promise(r => setTimeout(r, Math.max(0, ms)));
+  }
+
+  // ── Get post shortcode from URL ──────────────────────────
+  function getPostId() {
+    const m = window.location.href.match(/\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
+    return m ? m[2] : null;
+  }
+
+  // ── Find Like button ─────────────────────────────────────
+  function findLikeButton() {
+    // Search globally for heart SVG with aria-label Like
+    const svgs = document.querySelectorAll('svg[aria-label="Like"], svg[aria-label="Unlike"]');
+    for (const svg of svgs) {
+      const btn = svg.closest('button');
+      if (btn) return { btn, isLiked: svg.getAttribute('aria-label') === 'Unlike' };
+    }
+
+    // Fallback: search by button title
+    const allBtns = document.querySelectorAll('button');
+    for (const btn of allBtns) {
+      const svg = btn.querySelector('svg');
+      if (!svg) continue;
+      const label = svg.getAttribute('aria-label') || '';
+      if (label === 'Like' || label === 'Unlike') {
+        return { btn, isLiked: label === 'Unlike' };
       }
-    });
-    hud.querySelector('#ial-hud-pause').addEventListener('click', () => pauseLiking());
-    hud.querySelector('#ial-hud-stop').addEventListener('click', () => stopLiking());
-
-    updateModePills();
-    updateSpeedPills();
-    updateHudUi();
-  }
-
-  function updateModePills() {
-    const hud = document.getElementById('ial-floating-hud');
-    if (!hud) return;
-    const mode = STATE.settings.mode || 'both';
-    hud.querySelectorAll('#ial-mode-pills .ial-mode-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.mode === mode);
-    });
-
-    const startText = hud.querySelector('#ial-hud-start-text');
-    if (startText) {
-      if (mode === 'like') startText.textContent = 'Start Liking';
-      else if (mode === 'comment') startText.textContent = 'Start Commenting';
-      else startText.textContent = 'Start Both';
     }
+    return null;
   }
 
-  function updateSpeedPills() {
-    const hud = document.getElementById('ial-floating-hud');
-    if (!hud) return;
-    const currentMin = STATE.settings.minDelay;
-    hud.querySelectorAll('#ial-speed-pills .ial-pill-btn').forEach(btn => {
-      const d = parseFloat(btn.dataset.delay);
-      btn.classList.toggle('active', Math.abs(d - currentMin) < 0.5);
-    });
-  }
-
-  function makeDraggable(el, handle) {
-    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-    handle.onmousedown = dragMouseDown;
-
-    function dragMouseDown(e) {
-      if (e.target.tagName === 'BUTTON') return;
-      e.preventDefault();
-      pos3 = e.clientX;
-      pos4 = e.clientY;
-      document.onmouseup = closeDragElement;
-      document.onmousemove = elementDrag;
+  async function likeCurrentPost() {
+    const info = findLikeButton();
+    if (!info) {
+      console.log('[IAL] Like button not found');
+      return false;
     }
-
-    function elementDrag(e) {
-      e.preventDefault();
-      pos1 = pos3 - e.clientX;
-      pos2 = pos4 - e.clientY;
-      pos3 = e.clientX;
-      pos4 = e.clientY;
-      el.style.top = (el.offsetTop - pos2) + 'px';
-      el.style.left = (el.offsetLeft - pos1) + 'px';
-      el.style.bottom = 'auto';
-      el.style.right = 'auto';
+    if (info.isLiked) {
+      console.log('[IAL] Already liked');
+      return true; // already liked
     }
-
-    function closeDragElement() {
-      document.onmouseup = null;
-      document.onmousemove = null;
-    }
+    info.btn.click();
+    await sleep(600);
+    // Verify
+    const after = findLikeButton();
+    return after ? after.isLiked : true;
   }
 
-  function updateHudVisibility() {
-    const hud = document.getElementById('ial-floating-hud');
-    if (!hud) return;
-    hud.classList.toggle('hidden', !STATE.settings.showHud);
+  // ── Find comment textarea ────────────────────────────────
+  function findCommentTextarea() {
+    // Try regular textarea first
+    const ta = document.querySelector('textarea[placeholder*="comment" i], textarea[aria-label*="comment" i]');
+    if (ta) return { el: ta, type: 'textarea' };
+
+    // Try contenteditable div
+    const ce = document.querySelector('div[contenteditable="true"][placeholder*="comment" i], div[contenteditable="true"][aria-label*="comment" i]');
+    if (ce) return { el: ce, type: 'contenteditable' };
+
+    // Generic fallback: any visible textarea
+    const allTA = document.querySelectorAll('textarea');
+    for (const t of allTA) {
+      if (t.offsetParent !== null) return { el: t, type: 'textarea' };
+    }
+    return null;
   }
 
-  function updateHudUi() {
-    const hud = document.getElementById('ial-floating-hud');
-    if (!hud) return;
+  // Click the "Add a comment..." placeholder to activate the input
+  async function activateCommentBox() {
+    const placeholder = document.querySelector('span[class*="placeholder" i]');
+    if (placeholder) placeholder.click();
 
-    hud.querySelector('#ial-stat-liked').textContent = STATE.likedCount;
-    hud.querySelector('#ial-stat-commented').textContent = STATE.commentedCount;
-    hud.querySelector('#ial-stat-skipped').textContent = STATE.skippedCount;
-    hud.querySelector('#ial-stat-limit').textContent = STATE.settings.maxPosts > 0 ? STATE.settings.maxPosts : '∞';
+    // Click the Add a comment area
+    const commentArea = document.querySelector(
+      '[data-testid="comment-input-field"], ' +
+      'textarea[placeholder], ' +
+      'div[contenteditable]'
+    );
+    if (commentArea) commentArea.click();
 
-    const btnStart = hud.querySelector('#ial-hud-start');
-    const btnPause = hud.querySelector('#ial-hud-pause');
-    const btnStop = hud.querySelector('#ial-hud-stop');
-    const statusText = hud.querySelector('#ial-hud-status');
+    await sleep(500);
+  }
 
-    if (STATE.status === 'running') {
-      btnStart.disabled = true;
-      btnPause.disabled = false;
-      btnStop.disabled = false;
-      statusText.innerHTML = `<span class="ial-status-pulse"></span> ${escapeHtml(STATE.message)}`;
-    } else if (STATE.status === 'paused') {
-      btnStart.disabled = false;
-      hud.querySelector('#ial-hud-start-text').textContent = 'Resume';
-      btnPause.disabled = true;
-      btnStop.disabled = false;
-      statusText.innerHTML = `⏸ Paused`;
+  // Set value on textarea using React's native setter (proven approach)
+  function setNativeValue(el, value) {
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+    if (nativeSetter && nativeSetter.set) {
+      nativeSetter.set.call(el, value);
     } else {
-      btnStart.disabled = false;
-      updateModePills();
-      btnPause.disabled = true;
-      btnStop.disabled = true;
-      statusText.innerHTML = `Ready`;
-    }
-  }
-
-  function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  function notifyStatus(msg) {
-    if (msg) STATE.message = msg;
-    updateHudUi();
-    try {
-      chrome.runtime.sendMessage({
-        type: 'STATUS_UPDATE',
-        state: {
-          status: STATE.status,
-          mode: STATE.settings.mode,
-          likedCount: STATE.likedCount,
-          commentedCount: STATE.commentedCount,
-          skippedCount: STATE.skippedCount,
-          message: STATE.message
-        }
-      });
-    } catch (err) {}
-  }
-
-  // ==========================================
-  // AI Comment Engine & Authentic Prompting
-  // ==========================================
-
-  // Extract post details: image URL, alt tags, and caption text
-  function getPostContext(modal) {
-    const scope = modal || document;
-
-    // 1. High-res image
-    const imgs = scope.querySelectorAll('article img, div[role="dialog"] img');
-    let imageUrl = '';
-    let altText = '';
-    for (const img of imgs) {
-      if (img.width > 200 || img.height > 200 || img.src.includes('scontent') || img.alt) {
-        imageUrl = img.src;
-        altText = img.alt || '';
-        break;
-      }
-    }
-
-    // 2. Caption text
-    let caption = '';
-    const captionEl = scope.querySelector('article ul li h1, article ul li span, div[role="dialog"] h1');
-    if (captionEl) {
-      caption = captionEl.textContent.trim().substring(0, 300);
-    }
-
-    return { imageUrl, altText, caption };
-  }
-
-  // Convert image URL to Base64 (if CORS permits)
-  async function getBase64Image(imgUrl) {
-    if (!imgUrl) return null;
-    try {
-      const resp = await fetch(imgUrl);
-      const blob = await resp.blob();
-      return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64 = reader.result.split(',')[1];
-          resolve({ base64, mimeType: blob.type || 'image/jpeg' });
-        };
-        reader.onerror = () => resolve(null);
-        reader.readAsDataURL(blob);
-      });
-    } catch (e) {
-      return null;
-    }
-  }
-
-  // Generate authentic human comment via AI or Smart Fallback
-  async function generateAuthenticComment(postContext) {
-    const { imageUrl, altText, caption } = postContext;
-    const { aiProvider, aiApiKey, aiModel, aiEndpoint, commentTone } = STATE.settings;
-
-    // Tone descriptions
-    const tonePrompts = {
-      casual: "casual, chill, authentic friend vibe. Natural phrasing, lowercase or minimal caps.",
-      hype: "high-energy, hyped up, genuine excitement with fire/celebration emojis (🔥 🙌).",
-      aesthetic: "appreciating the artistic aesthetic, colors, lighting, composition or mood.",
-      short: "ultra short and sweet, 1 to 4 words max (e.g. 'unreal 🔥', 'love this so much', 'too clean')."
-    };
-    const toneGuide = tonePrompts[commentTone] || tonePrompts.casual;
-
-    const recentComments = Array.from(postedCommentTexts).slice(-15);
-    const uniquenessNotice = recentComments.length > 0
-      ? `\n\nCRITICAL UNIQUENESS RULE:\nDo NOT repeat or closely rephrase any of these comments already posted on other photos:\n- "${recentComments.join('"\n- "')}"\nYour comment MUST be completely distinct, unique, and fresh!`
-      : '';
-
-    const systemPrompt = `You are a real human Instagram user scrolling your feed.
-Write a single, authentic 1-line comment (or max 2 short lines) for this Instagram post based on the visual content and caption.
-
-STRICT AUTHENTICITY RULES:
-- Write naturally like a real person/friend, NOT an AI bot.
-- FORBIDDEN phrases: "What a stunning capture", "Breathtaking view", "This image evokes", "Magnificent photograph", "As an AI".
-- Keep it concise: between 3 to 10 words.
-- Natural emoji use (1 or 2 emojis max like 🔥, 🙌, ✨, 🤩, 👏, 💯).
-- Tone: ${toneGuide}${uniquenessNotice}
-- Output ONLY the comment text. No quotation marks, no hashtags, no filler text.`;
-
-    const userContent = `Post Details:
-Image Description: ${altText || "Photo/Reel"}
-Caption: ${caption || "No caption provided"}
-Write the unique authentic comment:`;
-
-    // 1. Google Gemini API
-    if (aiProvider === 'gemini' && aiApiKey) {
-      try {
-        notifyStatus('Analyzing photo with Gemini AI...');
-        const model = aiModel || 'gemini-1.5-flash';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${aiApiKey}`;
-
-        const parts = [{ text: `${systemPrompt}\n\n${userContent}` }];
-
-        const imgData = await getBase64Image(imageUrl);
-        if (imgData && imgData.base64) {
-          parts.push({
-            inline_data: {
-              mime_type: imgData.mimeType,
-              data: imgData.base64
-            }
-          });
-        }
-
-        const resp = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts }],
-            generationConfig: {
-              temperature: 1.0,
-              maxOutputTokens: 60
-            }
-          })
-        });
-
-        const data = await resp.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-        if (text) {
-          const cleaned = cleanAiOutput(text);
-          if (!isCommentAlreadyUsed(cleaned)) return cleaned;
-        }
-      } catch (err) {
-        console.warn('Gemini API failed, falling back to smart engine:', err);
-      }
-    }
-
-    // 2. OpenAI (ChatGPT) API
-    if (aiProvider === 'openai' && aiApiKey) {
-      try {
-        notifyStatus('Analyzing photo with ChatGPT...');
-        const model = aiModel || 'gpt-4o-mini';
-        const messages = [
-          { role: 'system', content: systemPrompt },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: userContent },
-              ...(imageUrl ? [{ type: 'image_url', image_url: { url: imageUrl, detail: 'low' } }] : [])
-            ]
-          }
-        ];
-
-        const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${aiApiKey}`
-          },
-          body: JSON.stringify({
-            model,
-            messages,
-            max_tokens: 50,
-            temperature: 1.0
-          })
-        });
-
-        const data = await resp.json();
-        const text = data.choices?.[0]?.message?.content?.trim();
-        if (text) {
-          const cleaned = cleanAiOutput(text);
-          if (!isCommentAlreadyUsed(cleaned)) return cleaned;
-        }
-      } catch (err) {
-        console.warn('OpenAI API failed, falling back to smart engine:', err);
-      }
-    }
-
-    // 3. OpenRouter / Open-Source Vision Model
-    if (aiProvider === 'openrouter' && aiApiKey) {
-      try {
-        notifyStatus('Analyzing with Open-Source AI...');
-        const endpoint = aiEndpoint || 'https://openrouter.ai/api/v1/chat/completions';
-        const model = aiModel || 'meta-llama/llama-3.2-11b-vision-instruct';
-
-        const messages = [
-          { role: 'system', content: systemPrompt },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: userContent },
-              ...(imageUrl ? [{ type: 'image_url', image_url: { url: imageUrl } }] : [])
-            ]
-          }
-        ];
-
-        const resp = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${aiApiKey}`
-          },
-          body: JSON.stringify({ model, messages, max_tokens: 50, temperature: 1.0 })
-        });
-
-        const data = await resp.json();
-        const text = data.choices?.[0]?.message?.content?.trim();
-        if (text) {
-          const cleaned = cleanAiOutput(text);
-          if (!isCommentAlreadyUsed(cleaned)) return cleaned;
-        }
-      } catch (err) {
-        console.warn('OpenRouter API failed, falling back:', err);
-      }
-    }
-
-    // 4. Smart Offline Context-Aware Fallback (Guaranteed Unused)
-    return getSmartOfflineComment(altText, caption, commentTone);
-  }
-
-  function cleanAiOutput(text) {
-    return text.replace(/^["']|["']$/g, '').replace(/[\r\n]+/g, ' ').trim();
-  }
-
-  // Dynamic context-based authentic human comments with guaranteed uniqueness
-  function getSmartOfflineComment(altText = '', caption = '', tone = 'casual') {
-    const text = `${altText} ${caption}`.toLowerCase();
-
-    const shortPool = [
-      'unreal 🔥', 'pure vibes', 'too clean 🙌', 'love this ✨', 'so good!',
-      'perfection 💯', 'obsessed 😍', 'insane shot', 'top tier 🔥', 'immaculate',
-      'this right here 👏', 'killing it', 'effortless ✨', 'so fire 🔥', 'elite vibes'
-    ];
-
-    const hypePool = [
-      'this goes insanely hard! 🔥',
-      'nah this is crazy good 🙌',
-      'leveling up every single post 🔥🔥',
-      'energy in this is unmatched 💯',
-      'absolutely killed this shot! 🚀',
-      'sheesh this goes crazy 🔥',
-      'too clean with it! 💯',
-      'unreal energy right here 🙌',
-      'straight heat as always 🔥',
-      'out of this world honestly 🚀'
-    ];
-
-    const aestheticPool = [
-      'the color palette and lighting here are unreal ✨',
-      'love the whole aesthetic of this shot',
-      'composition on this is so satisfying',
-      'the mood and tones here are top tier 📸',
-      'the lighting in this is immaculate',
-      'such a clean visual perspective ✨',
-      'tones on this are absolutely beautiful',
-      'framing is so well done here 📸',
-      'the atmosphere in this is incredible',
-      'cinematic feel to this shot ✨'
-    ];
-
-    const sunsetPool = [
-      'that sky is unreal 🔥',
-      'golden hour hits different ✨',
-      'sunset vibes are unmatched here',
-      'the colors in the sky are crazy',
-      'dreamy colors in that horizon ✨',
-      'best lighting of the day honestly'
-    ];
-
-    const naturePool = [
-      'views are insane! need to visit here',
-      'this spot looks unreal 🙌',
-      'such a peaceful location',
-      'adding this place to my bucket list 🔥',
-      'nature at its absolute finest 🌿',
-      'what an epic landscape shot'
-    ];
-
-    const foodPool = [
-      'this looks ridiculously good 🤤',
-      'now i am definitely hungry haha',
-      '10/10 presentation!',
-      'looks so delicious 😋',
-      'aesthetic cafe vibes at their best',
-      'need to try this place asap'
-    ];
-
-    const fashionPool = [
-      'the fit is looking great! 🔥',
-      'love the vibe on this 🙌',
-      'always bringing the best style 💯',
-      'looking sharp! ✨',
-      'the outfit coordination is top notch',
-      'effortlessly stylish as usual 👏'
-    ];
-
-    const generalCasualPool = [
-      'the vibes here are immaculate ✨',
-      'love everything about this shot! 🙌',
-      'the lighting here is so good 🔥',
-      'always posting top tier content 💯',
-      'love this aesthetic so much',
-      'this brought a smile to my feed 😊',
-      'such a wholesome moment captured',
-      'everything about this photo works so well',
-      'great seeing this pop up on my feed ✨',
-      'never missing with these posts! 👏',
-      'pure happiness in a single frame',
-      'truly wonderful perspective here 💯'
-    ];
-
-    let candidates = generalCasualPool;
-    if (tone === 'short') candidates = shortPool;
-    else if (tone === 'hype') candidates = hypePool;
-    else if (tone === 'aesthetic') candidates = aestheticPool;
-    else if (text.includes('sunset') || text.includes('sunrise') || text.includes('sky')) candidates = sunsetPool;
-    else if (text.includes('nature') || text.includes('mountain') || text.includes('beach') || text.includes('ocean')) candidates = naturePool;
-    else if (text.includes('food') || text.includes('coffee') || text.includes('cafe')) candidates = foodPool;
-    else if (text.includes('outfit') || text.includes('standing') || text.includes('person') || text.includes('style')) candidates = fashionPool;
-
-    // Filter to unused comments
-    const fresh = candidates.filter(c => !isCommentAlreadyUsed(c));
-    if (fresh.length > 0) {
-      return fresh[Math.floor(Math.random() * fresh.length)];
-    }
-
-    // Fallback across all pools for any unused comment
-    const allPools = [...shortPool, ...hypePool, ...aestheticPool, ...sunsetPool, ...naturePool, ...foodPool, ...fashionPool, ...generalCasualPool];
-    const anyFresh = allPools.filter(c => !isCommentAlreadyUsed(c));
-    if (anyFresh.length > 0) {
-      return anyFresh[Math.floor(Math.random() * anyFresh.length)];
-    }
-
-    // If completely exhausted, add dynamic micro-variations
-    const base = candidates[Math.floor(Math.random() * candidates.length)];
-    return base;
-  }
-
-  // Set value on React-controlled inputs/textareas by triggering the internal React _valueTracker
-  function setReactInputValue(el, value) {
-    if (!el) return;
-    try {
-      const isTextArea = el instanceof HTMLTextAreaElement || el.tagName === 'TEXTAREA';
-      const proto = isTextArea ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-      if (setter) {
-        setter.call(el, value);
-      } else {
-        el.value = value;
-      }
-      if (el._valueTracker) {
-        el._valueTracker.setValue(value);
-      }
-    } catch (e) {
       el.value = value;
     }
+    // Dispatch events React needs
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
 
-    // Dispatch rich event sequence to guarantee React state synchronization
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: value }));
+  function setContentEditable(el, value) {
+    el.focus();
+    el.textContent = '';
+    // Use execCommand (works in contenteditable)
+    document.execCommand('insertText', false, value);
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  // Automated posting of comment into Instagram post lightbox
-  async function postCommentOnModal(modal, commentText) {
-    const scope = modal || document;
+  // Find and click Submit/Post button
+  async function clickSubmitButton() {
+    // Look for Post / Submit button that is enabled
+    const candidates = [...document.querySelectorAll('button')].filter(b => {
+      const txt = b.textContent.trim().toLowerCase();
+      return (txt === 'post' || txt === 'submit' || txt === 'reply') && !b.disabled;
+    });
 
-    notifyStatus('Locating comment box...');
-
-    // 1. Find comment input element (textarea or contenteditable)
-    let inputEl = scope.querySelector('form textarea, textarea[aria-label*="comment" i], textarea[placeholder*="comment" i], div[role="textbox"][contenteditable="true"], div[contenteditable="true"]');
-    
-    // If not in modal scope, search full document (Instagram sometimes portals sidebar comments)
-    if (!inputEl) {
-      inputEl = document.querySelector('div[role="dialog"] form textarea, form textarea, textarea[aria-label*="comment" i], textarea[placeholder*="comment" i], div[role="textbox"][contenteditable="true"]');
-    }
-
-    // If still not visible, click the speech bubble / comment icon to open it
-    if (!inputEl) {
-      const commentSvg = (modal || document).querySelector('svg[aria-label="Comment"], svg[aria-label="Comentar"], svg[aria-label="Commenter"]');
-      if (commentSvg) {
-        const btn = commentSvg.closest('button, [role="button"]') || commentSvg;
+    for (const btn of candidates) {
+      if (btn.offsetParent !== null) {
         btn.click();
-        await sleep(500);
-        inputEl = (modal || document).querySelector('form textarea, textarea[placeholder*="comment" i], div[role="textbox"][contenteditable="true"]');
+        return true;
       }
     }
 
-    if (!inputEl) {
-      notifyStatus('⚠️ Comments disabled or comment box not found.');
+    // Fallback: Enter key on active element
+    const ae = document.activeElement;
+    if (ae) {
+      ae.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+      ae.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', keyCode: 13, bubbles: true }));
+      ae.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', keyCode: 13, bubbles: true }));
+    }
+    return false;
+  }
+
+  async function postComment(text) {
+    setStatus('Opening comment box...', 'running');
+    await activateCommentBox();
+    await sleep(600);
+
+    let box = findCommentTextarea();
+    if (!box) {
+      // Try clicking the comment icon first
+      const commentIcon = document.querySelector('svg[aria-label="Comment"]');
+      if (commentIcon) commentIcon.closest('button')?.click();
+      await sleep(800);
+      box = findCommentTextarea();
+    }
+
+    if (!box) {
+      console.log('[IAL] Comment box not found');
       return false;
     }
 
-    // 2. Focus and click to activate
-    inputEl.focus();
-    inputEl.click();
+    setStatus('Typing comment...', 'running');
+    box.el.focus();
+    await sleep(300);
+
+    if (box.type === 'textarea') {
+      setNativeValue(box.el, text);
+    } else {
+      setContentEditable(box.el, text);
+    }
+
+    await sleep(700);
+
+    setStatus('Submitting comment...', 'running');
+    const submitted = await clickSubmitButton();
+    await sleep(1000);
+
+    // Blur everything to free focus
+    if (document.activeElement) document.activeElement.blur();
+    document.body.focus();
+
+    return submitted;
+  }
+
+  // ── Navigate to next post ────────────────────────────────
+  async function navigateToNext() {
+    // First blur all focused elements
+    if (document.activeElement && document.activeElement !== document.body) {
+      document.activeElement.blur();
+    }
     await sleep(200);
 
-    notifyStatus('Typing comment...');
+    // Close any open overlays with Escape
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', keyCode: 27, bubbles: true }));
+    await sleep(300);
 
-    // 3. Insert the text using multiple techniques to guarantee React sync
-    if (inputEl.tagName === 'TEXTAREA' || inputEl.tagName === 'INPUT') {
-      // Clear first
-      setReactInputValue(inputEl, '');
-      await sleep(50);
-
-      // Attempt native execCommand first (best for React cursor)
-      try {
-        document.execCommand('selectAll', false, null);
-        document.execCommand('insertText', false, commentText);
-      } catch (e) {}
-
-      // Guarantee value set via prototype descriptor
-      setReactInputValue(inputEl, commentText);
-
-      // Simulate a small keypress to trigger any key-up validations
-      inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }));
-      inputEl.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', bubbles: true }));
-    } else {
-      // Contenteditable div
-      inputEl.focus();
-      try {
-        document.execCommand('selectAll', false, null);
-        document.execCommand('insertText', false, commentText);
-      } catch (e) {}
-      inputEl.innerText = commentText;
-      inputEl.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true }));
-    }
-
-    await sleep(400);
-
-    // 4. Find the Post button
-    notifyStatus('Submitting comment...');
-    const form = inputEl.closest('form') || inputEl.closest('div[role="presentation"]') || (modal || document);
-
-    // Look for post button
-    let postBtn = null;
-    const candidates = form.querySelectorAll('button, div[role="button"], span[role="button"]');
-    for (const el of candidates) {
-      const text = (el.textContent || '').trim().toLowerCase();
-      if (text === 'post' || text === 'publicar' || text === 'publier' || text === 'posten' || el.getAttribute('type') === 'submit') {
-        postBtn = el;
-        break;
+    // Strategy 1: Click Next (chevron) button in lightbox
+    const nextBtns = [
+      ...document.querySelectorAll('button[aria-label="Next"], button[aria-label="Go Forward"], svg[aria-label="Next"]'),
+    ];
+    for (const el of nextBtns) {
+      const btn = el.tagName === 'BUTTON' ? el : el.closest('button');
+      if (btn && btn.offsetParent !== null) {
+        btn.click();
+        await sleep(800);
+        return true;
       }
     }
 
-    // Wait up to 1500ms for Post button to become enabled/clickable
-    let attempts = 0;
-    while (attempts < 8) {
-      if (postBtn) {
-        const disabled = postBtn.disabled || 
-                         postBtn.getAttribute('aria-disabled') === 'true' || 
-                         postBtn.getAttribute('tabindex') === '-1' ||
-                         window.getComputedStyle(postBtn).pointerEvents === 'none' ||
-                         window.getComputedStyle(postBtn).opacity < 0.5;
-        if (!disabled) {
-          break; // Button is ready!
-        }
-      }
-      await sleep(150);
-      attempts++;
-    }
+    // Strategy 2: ArrowRight key
+    document.body.focus();
+    await sleep(100);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', keyCode: 39, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight', keyCode: 39, bubbles: true }));
+    await sleep(800);
 
-    let submitted = false;
+    return true;
+  }
 
-    // Method A: Click the Post button with realistic mouse events
-    if (postBtn) {
-      try {
-        postBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-        postBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-        postBtn.click();
-        submitted = true;
-      } catch (e) {}
-    }
+  // ── AI Comment Generation ─────────────────────────────────
+  const OFFLINE_POOL = [
+    "love this 🔥", "this is everything", "okay this is amazing",
+    "absolutely stunning", "the vibe here is immaculate", "this is so good",
+    "obsessed with this", "this made my day honestly", "genuinely love this",
+    "the energy here 👏", "this hits different", "need more of this",
+    "so beautiful omg", "this is top tier", "can't stop looking at this",
+    "this is art 🎨", "the aesthetic is everything", "so peaceful and beautiful",
+    "pure perfection", "this made me smile", "so wholesome 🥰",
+    "the way this looks 😍", "absolutely love the vibe", "this is goals",
+    "okay i'm obsessed", "the colors in this are insane", "stunning as always",
+    "this is a mood", "love everything about this", "honestly so beautiful",
+    "the composition here 🙌", "this is giving me life rn", "wow just wow",
+    "okay i needed this today", "such a great shot", "this is pure joy",
+    "the lighting is perfect", "love love love this", "this is iconic",
+    "this looks incredible", "the texture and colors 😍", "so so good",
+    "this is exactly my vibe", "okay this is a masterpiece", "literally gorgeous",
+    "the detail here is unreal", "this is 🔥🔥", "absolutely beautiful",
+    "love the perspective on this", "the feeling this gives 💯",
+    "this picture is everything", "cannot get enough of this",
+    "the way this is captured 📸", "love how real this feels",
+    "this is the content i needed", "stunning work here", "honestly breathtaking",
+    "the composition is chef's kiss", "this vibe is unmatched",
+    "the colors are doing something to me", "this photo is a whole mood",
+    "loving the realness of this", "this is giving me good vibes all day",
+    "the aesthetic is *chefs kiss*", "okay you really captured something here",
+    "beautiful doesn't even cover it", "this is seriously so good",
+    "the warmth in this 🥰", "okay i'm saving this one",
+    "this literally stopped my scroll", "stunning in the best way",
+    "the energy here is unmatched", "love everything you post",
+  ];
 
-    // Method B: Form submit
-    const parentForm = inputEl.closest('form');
-    if (parentForm) {
-      try {
-        if (typeof parentForm.requestSubmit === 'function') {
-          parentForm.requestSubmit();
-          submitted = true;
-        } else {
-          parentForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-          submitted = true;
-        }
-      } catch (e) {}
-    }
+  function getUniqueOfflineComment() {
+    const available = OFFLINE_POOL.filter(c => !usedCommentTexts.includes(c));
+    const pool = available.length > 0 ? available : OFFLINE_POOL;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    return pick;
+  }
 
-    // Method C: Enter key on textarea
-    ['keydown', 'keypress', 'keyup'].forEach(type => {
-      inputEl.dispatchEvent(new KeyboardEvent(type, {
-        key: 'Enter',
-        code: 'Enter',
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true
-      }));
+  function buildPrompt(context) {
+    const recent = usedCommentTexts.slice(-15);
+    const avoidStr = recent.length > 0
+      ? `\n\nIMPORTANT: Do NOT use or rephrase any of these previous comments:\n${recent.map((c, i) => `${i + 1}. ${c}`).join('\n')}`
+      : '';
+
+    return `You are a real Instagram user commenting on a post. Write ONE short, authentic comment (1-2 lines max) for this Instagram post.
+
+Rules:
+- Sound like a real young person, not AI
+- Lowercase is fine, casual tone
+- No hashtags, no emojis overload (0-1 emoji max)
+- No generic phrases like "amazing content" or "great post"
+- Be specific to what you see if context helps
+- Max 15 words
+- Just output the comment text, nothing else${avoidStr}
+
+Post context: ${context}`;
+  }
+
+  async function callGemini(prompt) {
+    const model = aiModel || 'gemini-1.5-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${aiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 1.1, maxOutputTokens: 60 },
+      }),
     });
-
-    // Wait for submission response
-    await sleep(1200);
-
-    // Unfocus / blur inputs so Instagram keyboard shortcuts & navigation work!
-    if (inputEl && typeof inputEl.blur === 'function') {
-      try { inputEl.blur(); } catch (e) {}
-    }
-    if (document.activeElement && typeof document.activeElement.blur === 'function') {
-      try { document.activeElement.blur(); } catch (e) {}
-    }
-
-    // Verify if comment box was cleared or reset (indicates successful submission)
-    const isCleared = (inputEl.value === '' || inputEl.innerText === '' || inputEl.value !== commentText);
-    if (isCleared || submitted) {
-      notifyStatus('Comment posted! ✅');
-      return true;
-    }
-
-    return true;
+    const data = await res.json();
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
   }
 
-  // ==========================================
-  // Helper Functions & Selectors
-  // ==========================================
-  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-  function getRandomDelay(minSec, maxSec) {
-    const min = cleanDelay(minSec, 0) * 1000;
-    const max = Math.max(min, cleanDelay(maxSec, 0) * 1000);
-    if (max <= 100) return 100;
-    return Math.floor(Math.random() * (max - min + 1) + min);
+  async function callOpenAI(prompt) {
+    const url = 'https://api.openai.com/v1/chat/completions';
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
+      body: JSON.stringify({
+        model: aiModel || 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 60,
+        temperature: 1.1,
+      }),
+    });
+    const data = await res.json();
+    return data?.choices?.[0]?.message?.content?.trim() || null;
   }
 
-  async function countdownDelay(ms) {
-    if (ms <= 300) {
-      await sleep(ms);
-      return;
-    }
-    const start = Date.now();
-    while (Date.now() - start < ms) {
-      if (isStopRequested || isPauseRequested) return;
-      const remainingSec = ((ms - (Date.now() - start)) / 1000).toFixed(1);
-      notifyStatus(`Waiting ${remainingSec}s...`);
-      await sleep(200);
-    }
+  async function callOpenRouter(prompt) {
+    const url = 'https://openrouter.ai/api/v1/chat/completions';
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
+      body: JSON.stringify({
+        model: aiModel || 'meta-llama/llama-3.1-8b-instruct:free',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 60,
+        temperature: 1.1,
+      }),
+    });
+    const data = await res.json();
+    return data?.choices?.[0]?.message?.content?.trim() || null;
   }
 
-  function checkActionBlock() {
-    const textElements = document.querySelectorAll('div[role="dialog"] h3, div[role="dialog"] span, div[role="dialog"] div');
-    for (const el of textElements) {
-      const txt = (el.textContent || '').toLowerCase();
-      if (txt.includes('try again later') || txt.includes('action blocked') || txt.includes('compromised')) {
-        return true;
-      }
+  async function generateComment() {
+    // Build context from page
+    const altTexts = [...document.querySelectorAll('img[alt]')]
+      .map(i => i.alt)
+      .filter(a => a && a.length > 10)
+      .slice(0, 3)
+      .join('; ');
+
+    const captionEl = document.querySelector('h1, [class*="caption"]');
+    const caption = captionEl ? captionEl.textContent.slice(0, 150) : '';
+    const context = [altTexts, caption].filter(Boolean).join(' | ') || 'an Instagram photo';
+
+    const prompt = buildPrompt(context);
+
+    let result = null;
+
+    try {
+      if (aiKey && aiProvider === 'gemini') result = await callGemini(prompt);
+      else if (aiKey && aiProvider === 'openai') result = await callOpenAI(prompt);
+      else if (aiKey && aiProvider === 'openrouter') result = await callOpenRouter(prompt);
+    } catch (e) {
+      console.warn('[IAL] AI call failed:', e);
     }
-    return false;
+
+    if (!result) result = getUniqueOfflineComment();
+
+    // Clean up quotes
+    result = result.replace(/^["']|["']$/g, '').trim();
+
+    // Track uniqueness
+    usedCommentTexts.push(result);
+    if (usedCommentTexts.length > 30) usedCommentTexts.shift();
+    saveIds();
+
+    return result;
   }
 
-  function getOpenModal() {
-    return document.querySelector('div[role="dialog"] article, article[role="presentation"], div[role="dialog"]') ||
-           (window.location.pathname.includes('/p/') || window.location.pathname.includes('/reel/') ? document.querySelector('article') : null);
-  }
+  // ── Main Loop ─────────────────────────────────────────────
+  async function mainLoop() {
+    await loadSettings();
+    createHud();
+    setStatus('Starting...', 'running');
 
-  async function waitForCondition(conditionFn, maxWaitMs = 1500, pollIntervalMs = 100) {
-    const start = Date.now();
-    while (Date.now() - start < maxWaitMs) {
-      if (isStopRequested || isPauseRequested) return null;
-      const res = conditionFn();
-      if (res) return res;
-      await sleep(pollIntervalMs);
-    }
-    return conditionFn();
-  }
+    let consecutiveFails = 0;
+    const MAX_FAILS = 5;
 
-  function getLikeButtonInfo(modal) {
-    const scope = modal || document;
-    const likeLabels = ['like', 'me gusta', 'curtir', 'j’aime', "j'aime", 'gefällt mir'];
-    const unlikeLabels = ['unlike', 'ya no me gusta', 'não curtir', 'descurtir', 'je n’aime plus', "je n'aime plus", 'gefällt mir nicht mehr'];
-
-    const allSvgs = scope.querySelectorAll('svg');
-    for (const svg of allSvgs) {
-      const label = (svg.getAttribute('aria-label') || '').trim().toLowerCase();
-      const parentBtn = svg.closest('button, [role="button"]') || svg;
-
-      if (unlikeLabels.includes(label)) {
-        return { isLiked: true, element: parentBtn };
-      }
-      if (likeLabels.includes(label)) {
-        return { isLiked: false, element: parentBtn };
-      }
-
-      const fill = svg.getAttribute('fill') || window.getComputedStyle(svg).fill;
-      if (fill.includes('255, 48, 64') || fill.toLowerCase() === '#ff3040') {
-        return { isLiked: true, element: parentBtn };
-      }
-    }
-
-    const buttons = scope.querySelectorAll('section button, div[role="dialog"] button');
-    for (const btn of buttons) {
-      const svg = btn.querySelector('svg');
-      if (!svg) continue;
-      const label = (svg.getAttribute('aria-label') || '').toLowerCase();
-      if (label.includes('like')) {
-        return { isLiked: label.includes('unlike'), element: btn };
-      }
-    }
-    return null;
-  }
-
-  function getNextButton() {
-    const nextLabels = ['next', 'siguiente', 'avançar', 'suivant', 'weiter', 'avanti'];
-
-    // 1. Search all SVGs across the document for aria-label or child title
-    const allSvgs = document.querySelectorAll('div[role="dialog"] ~ div button svg, div[role="dialog"] button svg, svg');
-    for (const svg of allSvgs) {
-      const label = (svg.getAttribute('aria-label') || '').trim().toLowerCase();
-      const title = (svg.querySelector('title')?.textContent || '').trim().toLowerCase();
-      if (nextLabels.includes(label) || nextLabels.includes(title)) {
-        return svg.closest('button, [role="button"], a') || svg;
-      }
-    }
-
-    // 2. Direct button or link with aria-label
-    const directBtn = document.querySelector('button[aria-label="Next" i], [aria-label="Next" i], a[aria-label="Next" i]');
-    if (directBtn) return directBtn;
-
-    // 3. Instagram right chevron elements
-    const chevronElements = document.querySelectorAll('button._abl-, div._aaqg button, svg path, svg polyline');
-    for (const el of chevronElements) {
-      if (el.tagName === 'BUTTON') {
-        const svg = el.querySelector('svg');
-        if (svg && (svg.getAttribute('aria-label') || '').toLowerCase().includes('next')) return el;
-      }
-      const d = el.getAttribute('d') || '';
-      const points = el.getAttribute('points') || '';
-      if (d.includes('M12.005 5.002') || d.includes('M8.47 4.97') || points.includes('16.999') || points.includes('9.001')) {
-        return el.closest('button, [role="button"], a');
-      }
-    }
-
-    return null;
-  }
-
-  function triggerNextNavigation() {
-    // 1. First un-focus any active inputs so keyboard events work!
-    if (document.activeElement && typeof document.activeElement.blur === 'function') {
-      try { document.activeElement.blur(); } catch (e) {}
-    }
-
-    // 2. Try clicking DOM Next chevron button
-    const nextBtn = getNextButton();
-    if (nextBtn) {
-      try {
-        nextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-        nextBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-        nextBtn.click();
-        return true;
-      } catch (e) {}
-    }
-
-    // 3. Fallback: Dispatch right arrow key across document, window, and body
-    const eventParams = {
-      key: 'ArrowRight',
-      code: 'ArrowRight',
-      keyCode: 39,
-      which: 39,
-      bubbles: true,
-      cancelable: true
-    };
-    document.dispatchEvent(new KeyboardEvent('keydown', eventParams));
-    window.dispatchEvent(new KeyboardEvent('keydown', eventParams));
-    if (document.body) document.body.dispatchEvent(new KeyboardEvent('keydown', eventParams));
-
-    return true;
-  }
-
-  function openFirstPost() {
-    if (getOpenModal() || window.location.pathname.includes('/p/') || window.location.pathname.includes('/reel/')) {
-      return true;
-    }
-    const firstPostLink = document.querySelector('main a[href*="/p/"], main a[href*="/reel/"], article a[href*="/p/"], article a[href*="/reel/"]');
-    if (firstPostLink) {
-      firstPostLink.click();
-      return true;
-    }
-    return false;
-  }
-
-  // ==========================================
-  // Main Automation Loop (Like & Comment)
-  // ==========================================
-  async function runLikingLoop() {
-    if (loopActive) return;
-    loopActive = true;
-    isStopRequested = false;
-    isPauseRequested = false;
-    STATE.status = 'running';
-
-    const mode = STATE.settings.mode || 'both';
-    notifyStatus(`Starting in ${mode.toUpperCase()} mode...`);
-
-    const opened = openFirstPost();
-    if (!opened) {
-      STATE.status = 'idle';
-      loopActive = false;
-      notifyStatus('No posts found. Open a profile first!');
-      return;
-    }
-
-    await waitForCondition(() => getOpenModal(), 1500, 100);
-
-    let consecutiveUnchangedCount = 0;
-    let lastUrl = window.location.href;
-
-    while (!isStopRequested && !isPauseRequested) {
-      if (checkActionBlock()) {
-        STATE.status = 'paused';
-        loopActive = false;
-        notifyStatus('⚠️ Action Block detected! Pausing for safety.');
-        alert('Instagram displayed an action block ("Try Again Later"). Pausing automatically to keep your account safe.');
-        return;
-      }
-
-      // Check max limit
-      const currentProcessed = Math.max(STATE.likedCount, STATE.commentedCount);
-      if (STATE.settings.maxPosts > 0 && currentProcessed >= STATE.settings.maxPosts) {
-        STATE.status = 'done';
-        loopActive = false;
-        notifyStatus(`🎉 Finished target of ${currentProcessed} posts!`);
-        return;
-      }
-
-      const modal = getOpenModal();
-      if (!modal) {
-        notifyStatus('Waiting for post...');
-        await sleep(350);
+    while (STATE.running) {
+      if (STATE.paused) {
+        setStatus('Paused', 'paused');
+        await sleep(1000);
         continue;
       }
 
-      // 1. LIKE ACTION (if mode is 'like' or 'both')
-      if (mode === 'like' || mode === 'both') {
-        const likeInfo = getLikeButtonInfo(modal);
-        if (likeInfo) {
-          if (likeInfo.isLiked) {
-            if (STATE.settings.skipLiked) {
-              STATE.skippedCount++;
-              notifyStatus(`Already liked. Skipping...`);
-            } else {
-              notifyStatus(`Post already liked.`);
-            }
-          } else {
-            likeInfo.element.click();
-            STATE.likedCount++;
-            notifyStatus(`Liked! (${STATE.likedCount}/${STATE.settings.maxPosts || '∞'})`);
-          }
-        }
-      }
+      const postId = getPostId();
+      setStatus(`Post: ${postId || 'scanning...'}`, 'running');
 
-      // 2. COMMENT ACTION (if mode is 'comment' or 'both')
-      if ((mode === 'comment' || mode === 'both') && !isStopRequested && !isPauseRequested) {
-        const currentPostId = getPostShortcode();
+      await sleep(500);
 
-        if (commentedPostIds.has(currentPostId)) {
-          notifyStatus('1-comment limit: already commented. Skipping...');
+      // ── LIKE ──────────────────────────────────────────────
+      if (STATE.mode === 'like' || STATE.mode === 'both') {
+        if (postId && likedPostIds.has(postId)) {
+          setStatus('Already liked, moving on', 'running');
         } else {
-          const postCtx = getPostContext(modal);
-          notifyStatus('Generating authentic AI comment...');
-          const comment = await generateAuthenticComment(postCtx);
-
-          if (comment) {
-            notifyStatus(`Posting: "${comment.substring(0, 25)}..."`);
-            const posted = await postCommentOnModal(modal, comment);
-            if (posted) {
-              commentedPostIds.add(currentPostId);
-              saveCommentedPostId(currentPostId);
-              savePostedCommentText(comment);
-              postedCommentTexts.add(comment.toLowerCase().trim());
-              STATE.commentedCount++;
-              notifyStatus(`Commented! (${STATE.commentedCount})`);
+          setStatus('Liking post...', 'running');
+          const liked = await likeCurrentPost();
+          if (liked) {
+            STATE.liked++;
+            if (postId) {
+              likedPostIds.add(postId);
+              saveIds();
             }
+            updateHud();
+            setStatus('✅ Liked!', 'running');
+          } else {
+            STATE.skipped++;
+            updateHud();
+            setStatus('⚠ Could not like, skipping', 'running');
           }
         }
+        await sleep(300);
       }
 
-      updateHudUi();
-
-      if (isStopRequested || isPauseRequested) break;
-
-      // 3. DELAY
-      const isInstant = (STATE.settings.minDelay === 0 && STATE.settings.maxDelay === 0);
-      const delayMs = getRandomDelay(STATE.settings.minDelay, STATE.settings.maxDelay);
-
-      if (!isInstant && delayMs > 300) {
-        await countdownDelay(delayMs);
-      } else {
-        await sleep(150);
+      // ── COMMENT ───────────────────────────────────────────
+      if (STATE.mode === 'comment' || STATE.mode === 'both') {
+        if (postId && commentedPostIds.has(postId)) {
+          setStatus('Already commented, moving on', 'running');
+        } else {
+          setStatus('Generating comment...', 'running');
+          const comment = await generateComment();
+          setStatus('Posting comment...', 'running');
+          const ok = await postComment(comment);
+          if (ok) {
+            STATE.commented++;
+            if (postId) {
+              commentedPostIds.add(postId);
+              saveIds();
+            }
+            updateHud();
+            setStatus('✅ Commented!', 'running');
+          } else {
+            STATE.skipped++;
+            updateHud();
+            setStatus('⚠ Comment failed, skipping', 'running');
+          }
+        }
+        await sleep(500);
       }
 
-      if (isStopRequested || isPauseRequested) break;
+      // ── PREVIEW ───────────────────────────────────────────
+      if (STATE.mode === 'preview') {
+        setStatus('Generating preview comment...', 'running');
+        const comment = await generateComment();
+        showPreview(comment);
+        setStatus('📋 Comment ready — copy & paste it!', 'running');
+        // Wait for user to copy, then navigate after delay
+        await sleep(Math.max(STATE.delayMs, 3000));
+      }
 
-      // 4. NAVIGATE TO NEXT POST
-      lastUrl = window.location.href;
-      triggerNextNavigation();
+      consecutiveFails = 0;
 
-      // Wait adaptively for URL transition
-      const maxNavWait = isInstant ? 900 : 1800;
-      await waitForCondition(() => window.location.href !== lastUrl, maxNavWait, 80);
+      // ── Delay between posts ────────────────────────────────
+      if (STATE.delayMs > 0 && STATE.mode !== 'preview') {
+        setStatus(`Waiting ${(STATE.delayMs / 1000).toFixed(1)}s...`, 'running');
+        await sleep(STATE.delayMs);
+      }
 
-      if (window.location.href === lastUrl) {
-        consecutiveUnchangedCount++;
-        notifyStatus(`Advancing to next post (attempt ${consecutiveUnchangedCount}/4)...`);
+      if (!STATE.running) break;
 
-        // Retry clicking next
-        triggerNextNavigation();
-        await sleep(700);
+      // ── Navigate to next post ──────────────────────────────
+      if (STATE.mode !== 'preview') hidePreview();
+      setStatus('Navigating to next post...', 'running');
+      await navigateToNext();
+      await sleep(1200);
 
-        // Grid Fallback: If modal chevron is stuck or reached end of current batch, open next post directly from profile grid!
-        if (window.location.href === lastUrl && consecutiveUnchangedCount >= 2) {
-          const gridLinks = Array.from(document.querySelectorAll('main a[href*="/p/"], main a[href*="/reel/"]'));
-          let nextPostToOpen = null;
-          for (const a of gridLinks) {
-            const m = (a.getAttribute('href') || '').match(/\/(p|reel)\/([a-zA-Z0-9_-]+)/);
-            if (m && !commentedPostIds.has(m[2])) {
-              nextPostToOpen = a;
-              break;
-            }
-          }
-
-          if (nextPostToOpen) {
-            notifyStatus('Opening next profile post from grid...');
-            const closeBtn = document.querySelector('svg[aria-label="Close" i], svg[aria-label="Fechar" i], svg[aria-label="Cerrar" i]');
-            if (closeBtn) {
-              try { (closeBtn.closest('button, [role="button"]') || closeBtn).click(); } catch (e) {}
-              await sleep(400);
-            }
-            nextPostToOpen.click();
-            await sleep(1500);
-            consecutiveUnchangedCount = 0;
-            continue;
-          }
+      // Check if navigation worked
+      const newId = getPostId();
+      if (newId === postId && postId !== null) {
+        consecutiveFails++;
+        setStatus(`Navigation stuck (${consecutiveFails}/${MAX_FAILS})`, 'running');
+        if (consecutiveFails >= MAX_FAILS) {
+          setStatus('⛔ Navigation stuck, stopping', 'idle');
+          STATE.running = false;
+          break;
         }
-
-        if (window.location.href === lastUrl && consecutiveUnchangedCount >= 4) {
-          STATE.status = 'done';
-          loopActive = false;
-          notifyStatus(`✨ All profile posts completed! Liked: ${STATE.likedCount}, Commented: ${STATE.commentedCount}`);
-          return;
-        }
-      } else {
-        consecutiveUnchangedCount = 0;
       }
     }
 
-    loopActive = false;
-    if (isStopRequested) {
-      STATE.status = 'stopped';
-      notifyStatus('Stopped by user.');
-    } else if (isPauseRequested) {
-      STATE.status = 'paused';
-      notifyStatus('Paused. Click Resume when ready.');
-    }
+    setStatus('Stopped', 'idle');
   }
 
-  function startLiking(newSettings) {
-    if (newSettings) {
-      STATE.settings = Object.assign(STATE.settings, newSettings);
-      updateSpeedPills();
-      updateModePills();
-      updateHudUi();
-    }
-    isStopRequested = false;
-    isPauseRequested = false;
-    runLikingLoop();
-  }
-
-  function pauseLiking() {
-    isPauseRequested = true;
-    STATE.status = 'paused';
-    notifyStatus('Pausing...');
-  }
-
-  function resumeLiking() {
-    isPauseRequested = false;
-    isStopRequested = false;
-    STATE.status = 'running';
-    runLikingLoop();
-  }
-
-  function stopLiking() {
-    isStopRequested = true;
-    isPauseRequested = false;
-    STATE.status = 'stopped';
-    notifyStatus('Stopping...');
-  }
-
-  // ==========================================
-  // Message Listener for Popup
-  // ==========================================
-  chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
-    switch (req.action) {
-      case 'getStatus':
-        sendResponse({
-          status: STATE.status,
-          mode: STATE.settings.mode,
-          likedCount: STATE.likedCount,
-          commentedCount: STATE.commentedCount,
-          skippedCount: STATE.skippedCount,
-          message: STATE.message
-        });
-        break;
-
+  // ── Message Listener ──────────────────────────────────────
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    switch (msg.action) {
       case 'start':
-        startLiking(req.settings);
-        sendResponse({
-          status: STATE.status,
-          mode: STATE.settings.mode,
-          likedCount: STATE.likedCount,
-          commentedCount: STATE.commentedCount,
-          skippedCount: STATE.skippedCount,
-          message: STATE.message
-        });
+        if (!STATE.running) {
+          STATE.running = true;
+          STATE.paused = false;
+          STATE.mode = msg.mode || 'like';
+          STATE.delayMs = typeof msg.delayMs === 'number' ? msg.delayMs : 1500;
+          STATE.liked = 0;
+          STATE.commented = 0;
+          STATE.skipped = 0;
+          mainLoop().catch(e => {
+            console.error('[IAL] mainLoop error:', e);
+            STATE.running = false;
+            setStatus('Error: ' + e.message, 'idle');
+          });
+        }
+        sendResponse({ ok: true });
         break;
 
       case 'pause':
-        pauseLiking();
-        sendResponse({
-          status: STATE.status,
-          mode: STATE.settings.mode,
-          likedCount: STATE.likedCount,
-          commentedCount: STATE.commentedCount,
-          skippedCount: STATE.skippedCount,
-          message: STATE.message
-        });
+        STATE.paused = !STATE.paused;
+        sendResponse({ paused: STATE.paused });
         break;
 
       case 'stop':
-        stopLiking();
+        STATE.running = false;
+        STATE.paused = false;
+        setStatus('Stopped', 'idle');
+        sendResponse({ ok: true });
+        break;
+
+      case 'getStatus':
         sendResponse({
-          status: STATE.status,
-          mode: STATE.settings.mode,
-          likedCount: STATE.likedCount,
-          commentedCount: STATE.commentedCount,
-          skippedCount: STATE.skippedCount,
-          message: STATE.message
+          running: STATE.running,
+          paused: STATE.paused,
+          liked: STATE.liked,
+          commented: STATE.commented,
+          skipped: STATE.skipped,
+          status: STATE.currentStatus,
+          mode: STATE.mode,
         });
         break;
 
-      case 'updateSettings':
-        if (req.settings) {
-          STATE.settings = Object.assign(STATE.settings, req.settings);
-          updateHudVisibility();
-          updateSpeedPills();
-          updateModePills();
-          updateHudUi();
-        }
-        sendResponse({ success: true });
+      case 'showHud':
+        createHud();
+        if (hud) hud.style.display = 'block';
+        sendResponse({ ok: true });
+        break;
+
+      case 'saveSettings':
+        aiProvider = msg.aiProvider || 'offline';
+        aiKey = msg.aiKey || '';
+        aiModel = msg.aiModel || '';
+        chrome.storage.local.set({
+          aiProvider: aiProvider,
+          aiKey: aiKey,
+          aiModel: aiModel,
+          delayMs: msg.delayMs || 1500,
+        });
+        sendResponse({ ok: true });
         break;
     }
-    return true;
+    return true; // async response
   });
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', createHud);
-  } else {
+  // Auto-show HUD when on a post page
+  if (/\/(p|reel|tv)\//.test(window.location.pathname)) {
     createHud();
   }
+
 })();

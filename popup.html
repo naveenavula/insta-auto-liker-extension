@@ -1,150 +1,110 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Insta Auto Liker & AI Commenter</title>
-  <link rel="stylesheet" href="popup.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Insta Auto Liker v1.2.0</title>
+  <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <div class="container">
-    <header class="header">
-      <div class="logo">
-        <svg class="heart-icon" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
-        </svg>
-        <span class="title">Insta Auto Bot</span>
-        <span class="version-tag">v1.1.4</span>
+  <div id="app">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-left">
+        <img src="icons/icon48.png" width="28" height="28" alt="logo" />
+        <div>
+          <div class="app-name">Auto Liker & Commenter</div>
+          <div class="version">v1.2.0</div>
+        </div>
       </div>
-      <span id="status-badge" class="badge idle">Idle</span>
-    </header>
+      <div id="status-badge" class="badge badge-idle">Idle</div>
+    </div>
 
-    <!-- Action Mode Selection -->
-    <div class="mode-selection">
-      <div class="section-label">Action Mode:</div>
-      <div class="mode-pills" id="mode-pills">
-        <button type="button" class="mode-pill active" data-mode="both">❤️+💬 Both</button>
-        <button type="button" class="mode-pill" data-mode="like">❤️ Like</button>
-        <button type="button" class="mode-pill" data-mode="comment">💬 Comment</button>
-      </div>
+    <!-- Mode Selector -->
+    <div class="section-label">Mode</div>
+    <div class="mode-grid">
+      <button class="mode-btn active" data-mode="like">
+        <span class="mode-icon">❤️</span>
+        <span>Like Only</span>
+      </button>
+      <button class="mode-btn" data-mode="comment">
+        <span class="mode-icon">💬</span>
+        <span>Comment Only</span>
+      </button>
+      <button class="mode-btn" data-mode="both">
+        <span class="mode-icon">🔥</span>
+        <span>Like + Comment</span>
+      </button>
+      <button class="mode-btn" data-mode="preview">
+        <span class="mode-icon">✨</span>
+        <span>Generate & Copy</span>
+      </button>
+    </div>
+
+    <!-- Speed / Delay -->
+    <div class="section-label">Delay between posts</div>
+    <div class="speed-row">
+      <button class="speed-pill active" data-ms="0">Instant</button>
+      <button class="speed-pill" data-ms="1000">1s</button>
+      <button class="speed-pill" data-ms="2000">2s</button>
+      <button class="speed-pill" data-ms="5000">5s</button>
+    </div>
+    <div class="custom-delay-row">
+      <input type="number" id="custom-delay" min="0" max="60000" placeholder="Custom ms" />
+      <span>ms</span>
     </div>
 
     <!-- Stats -->
-    <div class="stats-card">
-      <div class="stat-item">
-        <span class="stat-value" id="stat-liked">0</span>
-        <span class="stat-label">Liked</span>
+    <div class="stats-row">
+      <div class="stat-box">
+        <div class="stat-num" id="stat-liked">0</div>
+        <div class="stat-label">Liked</div>
       </div>
-      <div class="stat-item">
-        <span class="stat-value" id="stat-commented">0</span>
-        <span class="stat-label">Commented</span>
+      <div class="stat-box">
+        <div class="stat-num" id="stat-commented">0</div>
+        <div class="stat-label">Commented</div>
       </div>
-      <div class="stat-item">
-        <span class="stat-value" id="stat-skipped">0</span>
-        <span class="stat-label">Skipped</span>
+      <div class="stat-box">
+        <div class="stat-num" id="stat-skipped">0</div>
+        <div class="stat-label">Skipped</div>
       </div>
     </div>
+    <div id="current-status" class="current-status">Idle</div>
 
     <!-- Controls -->
-    <div class="controls-section">
-      <button id="btn-start" class="btn btn-primary">
-        <span class="btn-icon">▶</span> <span id="btn-start-label">Start Like & Comment</span>
-      </button>
-      <div class="btn-group">
-        <button id="btn-pause" class="btn btn-secondary" disabled>⏸ Pause</button>
-        <button id="btn-stop" class="btn btn-danger" disabled>⏹ Stop</button>
-      </div>
+    <div class="controls">
+      <button id="btn-start" class="btn btn-start">▶ Start</button>
+      <button id="btn-pause" class="btn btn-pause" disabled>⏸ Pause</button>
+      <button id="btn-stop" class="btn btn-stop" disabled>⏹ Stop</button>
     </div>
 
-    <!-- Speed Presets -->
-    <div class="settings-section">
-      <h3>Speed Preset</h3>
-      <div class="speed-presets">
-        <button type="button" class="preset-btn" data-delay="0">⚡ 0s Instant</button>
-        <button type="button" class="preset-btn" data-delay="1">1s Fast</button>
-        <button type="button" class="preset-btn" data-delay="3">3s Safe</button>
-      </div>
-
-      <div class="form-row" style="margin-top: 6px;">
-        <label for="min-delay">Min Delay (s):</label>
-        <input type="number" id="min-delay" min="0" max="60" step="0.5" value="0">
-      </div>
-
-      <div class="form-row">
-        <label for="max-delay">Max Delay (s):</label>
-        <input type="number" id="max-delay" min="0" max="60" step="0.5" value="0">
-      </div>
-
-      <div class="form-row">
-        <label for="max-posts">Max Posts Limit:</label>
-        <input type="number" id="max-posts" min="0" max="1000" value="50" title="0 = Unlimited">
-      </div>
-
-      <div class="checkbox-row">
-        <input type="checkbox" id="skip-liked" checked>
-        <label for="skip-liked">Skip already liked posts</label>
-      </div>
-
-      <div class="checkbox-row">
-        <input type="checkbox" id="show-hud" checked>
-        <label for="show-hud">Show floating controller on page</label>
-      </div>
-    </div>
-
-    <!-- AI Comment Settings Section -->
-    <div class="settings-section ai-section" id="ai-settings-card">
-      <div class="ai-header-title">
-        <svg class="ai-sparkle-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-          <path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/>
-        </svg>
-        <h3>AI Comment Engine</h3>
-      </div>
-
-      <div class="form-row">
-        <label for="ai-provider">AI Provider:</label>
-        <select id="ai-provider" class="select-input">
-          <option value="gemini" selected>Google Gemini (Free Tier)</option>
-          <option value="openai">OpenAI (ChatGPT / GPT-4o)</option>
-          <option value="openrouter">OpenRouter / Open-Source (Llama 3.2 Vision)</option>
-          <option value="fallback">Smart Offline Fallback (No Key)</option>
-        </select>
-      </div>
-
-      <div class="form-row" id="row-api-key">
-        <label for="ai-api-key">API Key:</label>
-        <div class="input-with-action">
-          <input type="password" id="ai-api-key" placeholder="Paste your API key...">
-          <button type="button" id="btn-toggle-key" class="btn-mini" title="Show/Hide">👁</button>
+    <!-- AI Settings (collapsible) -->
+    <details class="ai-section">
+      <summary>🤖 AI Settings (for comments)</summary>
+      <div class="ai-body">
+        <div class="ai-row">
+          <label>Provider</label>
+          <select id="ai-provider">
+            <option value="offline">Offline (built-in)</option>
+            <option value="gemini">Gemini (Google)</option>
+            <option value="openai">OpenAI (ChatGPT)</option>
+            <option value="openrouter">OpenRouter (Free models)</option>
+          </select>
+        </div>
+        <div class="ai-row">
+          <label>API Key</label>
+          <input type="password" id="ai-key" placeholder="Paste your API key" />
+        </div>
+        <div class="ai-row">
+          <label>Model</label>
+          <input type="text" id="ai-model" placeholder="e.g. gemini-1.5-flash" />
+        </div>
+        <button id="btn-save-ai" class="btn btn-save">💾 Save AI Settings</button>
+        <div class="ai-hint">
+          Leave provider as "Offline" if you don't have an API key — it uses 70+ built-in authentic phrases.
         </div>
       </div>
-
-      <div class="form-row" id="row-ai-model">
-        <label for="ai-model">Model:</label>
-        <input type="text" id="ai-model" value="gemini-1.5-flash" placeholder="e.g. gemini-1.5-flash">
-      </div>
-
-      <div class="form-row" id="row-ai-endpoint" style="display: none;">
-        <label for="ai-endpoint">Custom URL:</label>
-        <input type="text" id="ai-endpoint" placeholder="https://api.openai.com/v1">
-      </div>
-
-      <div class="form-row">
-        <label for="comment-tone">Comment Style:</label>
-        <select id="comment-tone" class="select-input">
-          <option value="casual" selected>Casual & Authentic (Friend vibe)</option>
-          <option value="hype">Hype & High Energy (Fire 🔥)</option>
-          <option value="aesthetic">Aesthetic & Artistic (Photographer vibe)</option>
-          <option value="short">Short & Sweet (1-3 words)</option>
-        </select>
-      </div>
-
-      <div class="ai-hint" id="ai-provider-hint">
-        💡 Gemini 1.5 Flash has a generous free tier. Get a key at <a href="https://aistudio.google.com" target="_blank" style="color: #60a5fa;">aistudio.google.com</a>.
-      </div>
-    </div>
-
-    <footer class="footer">
-      <div id="status-message" class="status-message">Open any Instagram profile to begin.</div>
-    </footer>
+    </details>
   </div>
   <script src="popup.js"></script>
 </body>
