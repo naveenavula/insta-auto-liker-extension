@@ -124,7 +124,7 @@
             <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
           </svg>
           <span class="ial-brand-gradient">Auto Bot</span>
-          <span style="font-size: 10px; color: #888;">v1.1.2</span>
+          <span style="font-size: 10px; color: #888;">v1.1.4</span>
         </div>
         <div class="ial-header-actions">
           <button class="ial-btn-icon" id="ial-btn-toggle" title="Minimize / Expand">_</button>
@@ -849,6 +849,14 @@ Write the unique authentic comment:`;
     // Wait for submission response
     await sleep(1200);
 
+    // Unfocus / blur inputs so Instagram keyboard shortcuts & navigation work!
+    if (inputEl && typeof inputEl.blur === 'function') {
+      try { inputEl.blur(); } catch (e) {}
+    }
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      try { document.activeElement.blur(); } catch (e) {}
+    }
+
     // Verify if comment box was cleared or reset (indicates successful submission)
     const isCleared = (inputEl.value === '' || inputEl.innerText === '' || inputEl.value !== commentText);
     if (isCleared || submitted) {
@@ -947,38 +955,70 @@ Write the unique authentic comment:`;
     return null;
   }
 
-  function getNextButton(modal) {
-    const scope = modal || document;
-    const nextLabels = ['next', 'siguiente', 'avançar', 'suivant', 'weiter'];
-    const nextSvgs = scope.querySelectorAll('svg');
-    for (const svg of nextSvgs) {
+  function getNextButton() {
+    const nextLabels = ['next', 'siguiente', 'avançar', 'suivant', 'weiter', 'avanti'];
+
+    // 1. Search all SVGs across the document for aria-label or child title
+    const allSvgs = document.querySelectorAll('div[role="dialog"] ~ div button svg, div[role="dialog"] button svg, svg');
+    for (const svg of allSvgs) {
       const label = (svg.getAttribute('aria-label') || '').trim().toLowerCase();
-      if (nextLabels.includes(label)) {
+      const title = (svg.querySelector('title')?.textContent || '').trim().toLowerCase();
+      if (nextLabels.includes(label) || nextLabels.includes(title)) {
         return svg.closest('button, [role="button"], a') || svg;
       }
     }
-    const nextChevron = document.querySelector('svg[aria-label="Next"], [aria-label="Next"]');
-    if (nextChevron) {
-      return nextChevron.closest('button, [role="button"], a') || nextChevron;
+
+    // 2. Direct button or link with aria-label
+    const directBtn = document.querySelector('button[aria-label="Next" i], [aria-label="Next" i], a[aria-label="Next" i]');
+    if (directBtn) return directBtn;
+
+    // 3. Instagram right chevron elements
+    const chevronElements = document.querySelectorAll('button._abl-, div._aaqg button, svg path, svg polyline');
+    for (const el of chevronElements) {
+      if (el.tagName === 'BUTTON') {
+        const svg = el.querySelector('svg');
+        if (svg && (svg.getAttribute('aria-label') || '').toLowerCase().includes('next')) return el;
+      }
+      const d = el.getAttribute('d') || '';
+      const points = el.getAttribute('points') || '';
+      if (d.includes('M12.005 5.002') || d.includes('M8.47 4.97') || points.includes('16.999') || points.includes('9.001')) {
+        return el.closest('button, [role="button"], a');
+      }
     }
+
     return null;
   }
 
   function triggerNextNavigation() {
-    const nextBtn = getNextButton(getOpenModal());
-    if (nextBtn) {
-      nextBtn.click();
-      return true;
+    // 1. First un-focus any active inputs so keyboard events work!
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      try { document.activeElement.blur(); } catch (e) {}
     }
-    const event = new KeyboardEvent('keydown', {
+
+    // 2. Try clicking DOM Next chevron button
+    const nextBtn = getNextButton();
+    if (nextBtn) {
+      try {
+        nextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        nextBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        nextBtn.click();
+        return true;
+      } catch (e) {}
+    }
+
+    // 3. Fallback: Dispatch right arrow key across document, window, and body
+    const eventParams = {
       key: 'ArrowRight',
       code: 'ArrowRight',
       keyCode: 39,
       which: 39,
       bubbles: true,
       cancelable: true
-    });
-    document.dispatchEvent(event);
+    };
+    document.dispatchEvent(new KeyboardEvent('keydown', eventParams));
+    window.dispatchEvent(new KeyboardEvent('keydown', eventParams));
+    if (document.body) document.body.dispatchEvent(new KeyboardEvent('keydown', eventParams));
+
     return true;
   }
 
@@ -1110,18 +1150,48 @@ Write the unique authentic comment:`;
       lastUrl = window.location.href;
       triggerNextNavigation();
 
-      const maxNavWait = isInstant ? 800 : 1600;
+      // Wait adaptively for URL transition
+      const maxNavWait = isInstant ? 900 : 1800;
       await waitForCondition(() => window.location.href !== lastUrl, maxNavWait, 80);
 
       if (window.location.href === lastUrl) {
         consecutiveUnchangedCount++;
-        triggerNextNavigation();
-        await sleep(500);
+        notifyStatus(`Advancing to next post (attempt ${consecutiveUnchangedCount}/4)...`);
 
+        // Retry clicking next
+        triggerNextNavigation();
+        await sleep(700);
+
+        // Grid Fallback: If modal chevron is stuck or reached end of current batch, open next post directly from profile grid!
         if (window.location.href === lastUrl && consecutiveUnchangedCount >= 2) {
+          const gridLinks = Array.from(document.querySelectorAll('main a[href*="/p/"], main a[href*="/reel/"]'));
+          let nextPostToOpen = null;
+          for (const a of gridLinks) {
+            const m = (a.getAttribute('href') || '').match(/\/(p|reel)\/([a-zA-Z0-9_-]+)/);
+            if (m && !commentedPostIds.has(m[2])) {
+              nextPostToOpen = a;
+              break;
+            }
+          }
+
+          if (nextPostToOpen) {
+            notifyStatus('Opening next profile post from grid...');
+            const closeBtn = document.querySelector('svg[aria-label="Close" i], svg[aria-label="Fechar" i], svg[aria-label="Cerrar" i]');
+            if (closeBtn) {
+              try { (closeBtn.closest('button, [role="button"]') || closeBtn).click(); } catch (e) {}
+              await sleep(400);
+            }
+            nextPostToOpen.click();
+            await sleep(1500);
+            consecutiveUnchangedCount = 0;
+            continue;
+          }
+        }
+
+        if (window.location.href === lastUrl && consecutiveUnchangedCount >= 4) {
           STATE.status = 'done';
           loopActive = false;
-          notifyStatus(`✨ End of posts! Liked: ${STATE.likedCount}, Commented: ${STATE.commentedCount}`);
+          notifyStatus(`✨ All profile posts completed! Liked: ${STATE.likedCount}, Commented: ${STATE.commentedCount}`);
           return;
         }
       } else {
